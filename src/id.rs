@@ -4,6 +4,11 @@ use std::collections::HashMap;
 pub trait IdValue: Unsigned + Integer + Copy {}
 impl<T> IdValue for T where T: Unsigned + Integer + Copy {}
 
+pub enum IdError {
+    Duplicate,
+    NonExistent
+}
+
 /// An ID.
 /// Each ID should be unique within a given system.
 /// 
@@ -61,9 +66,9 @@ impl<T: IdValue> IdManager<T> {
     /// let id2 = idman.create("foo");
     /// // -> Err
     /// ```
-    pub fn create(&mut self, id_str: &str) -> Result<Id<T>, ()> {
+    pub fn create(&mut self, id_str: &str) -> Result<Id<T>, IdError> {
         if self.ids.contains_key(id_str) {
-            Err(())
+            Err(IdError::Duplicate)
         } else {
             let id = Id::<T>(self.next_id_value);
             self.ids.insert(id_str.to_string(), self.next_id_value);
@@ -89,11 +94,17 @@ impl<T: IdValue> IdManager<T> {
     /// let idref2 = idman.reference("bar");
     /// // -> Err
     /// ```
-    pub fn reference(&self, id_str: &str) -> Result<IdRef<T>, ()> {
+    pub fn reference(&self, id_str: &str) -> Result<IdRef<T>, IdError> {
         match self.ids.get(id_str) {
             Some(v) => Ok(IdRef::<T>(*v)),
-            None => Err(())
+            None => Err(IdError::NonExistent)
         }
+    }
+}
+
+impl<T: IdValue> Default for IdManager<T> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

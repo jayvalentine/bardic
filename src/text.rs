@@ -74,7 +74,7 @@ impl<K: ParameterKey> RGrammar<K> {
                         return Err(RGrammarParseError::NestedParameterDelimiter);
                     }
 
-                    if current.len() > 0 {
+                    if !current.is_empty() {
                         parts.push(RGrammarPart::text(&current));
                         current.clear();
                     }
@@ -84,7 +84,7 @@ impl<K: ParameterKey> RGrammar<K> {
                     if !in_param {
                         return Err(RGrammarParseError::UnmatchedParameterDelimiter)
                     }
-                    else if current.len() == 0 {
+                    else if current.is_empty() {
                         return Err(RGrammarParseError::EmptyParameter)
                     }
 
@@ -93,12 +93,7 @@ impl<K: ParameterKey> RGrammar<K> {
                     in_param = false;
                 }
                 _ => {
-                    if in_param {
-                        current.push(c);
-                    }
-                    else {
-                        current.push(c);
-                    }
+                    current.push(c);
                 }
             }
         }
@@ -110,7 +105,7 @@ impl<K: ParameterKey> RGrammar<K> {
         }
 
         // Otherwise we may have a text element that needs adding.
-        if current.len() > 0 {
+        if !current.is_empty() {
             parts.push(RGrammarPart::text(&current))
         }
 
@@ -168,7 +163,7 @@ impl<K: ParameterKey> RGrammarPart<K> {
     pub fn expand_with(&self, f: &dyn Fn(&K) -> Option<String>) -> Result<String, RGrammarExpandError<K>> {
         match self {
             Self::Text(t) => Ok(t.clone()),
-            Self::Parameter(k) => match f(&k) {
+            Self::Parameter(k) => match f(k) {
                 Some(v) => Ok(v.clone()),
                 None => Err(RGrammarExpandError::UndefinedArgument(k.clone()))
             },
@@ -177,6 +172,7 @@ impl<K: ParameterKey> RGrammarPart<K> {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
 
