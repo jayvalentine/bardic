@@ -35,3 +35,5 @@ King Arthur of Camelot left in search of the Holy Grail
 
 When procedurally-generated properties are used to expand the fields
 of the grammar, varied text can be generated for entities in your system.
+
+The grammar above can be described using Bardic's `RGrammar` struct.
