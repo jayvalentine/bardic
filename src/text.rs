@@ -40,6 +40,7 @@ pub enum RGrammarExpandError<K: Hash + Clone> {
 }
 
 impl<K: ParameterKey> RGrammar<K> {
+    /// Create a new replacement grammar from a vector of components.
     pub fn new(parts: Vec<RGrammarPart<K>>) -> RGrammar<K> {
         RGrammar { parts }
     }
@@ -62,6 +63,8 @@ impl<K: ParameterKey> RGrammar<K> {
         self.expand_with(&|p| { params.get(p).cloned() })
     }
 
+    /// Parse a string into a grammar using a function to determine parameter keys
+    /// from strings in the input.
     pub fn parse_with(s: &str, f: &dyn Fn(&str) -> K) -> Result<RGrammar<K>, RGrammarParseError> {
         let mut parts = Vec::new();
         let mut current = String::new();
@@ -122,6 +125,7 @@ macro_rules! rgrammar {
     };
 }
 
+/// Error returned when parsing a grammar from a string fails.
 #[derive(PartialEq, Eq, Debug)]
 pub enum RGrammarParseError {
     UnmatchedParameterDelimiter,
@@ -137,6 +141,7 @@ impl RGrammar<String> {
     }
 }
 
+/// A part of a replacement grammar.
 #[derive(Debug)]
 pub enum RGrammarPart<K: ParameterKey> {
     Text(String),
