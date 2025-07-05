@@ -1,2 +1,3 @@
-# bardic
-A toolbox for building procedural narratives.
+# Bardic
+
+Bardic is a Rust toolbox for building procedural narratives at scale.
