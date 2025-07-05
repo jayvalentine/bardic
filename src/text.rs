@@ -1,4 +1,3 @@
-use std::str::FromStr;
 use std::collections::HashMap;
 use std::hash::Hash;
 
@@ -14,20 +13,23 @@ impl<T> ParameterKey for T where T: Hash + Eq + Clone {}
 /// # Examples
 /// 
 /// ```
-/// use bardic::text::RGrammar;
+/// use bardic::text::{RGrammar, RGrammarPart};
+/// use bardic::rgrammar;
+/// use std::collections::HashMap;
 /// 
-/// let leader_title = RGrammar::from_string("[leader_role] [leader_name] of [leader_homeland]").unwrap();
-/// let event_text = rgrammar![RGrammarPart::subgrammar(leader_title), RGrammarPart::text(" left in search of the "), RGrammarPart::param("artifact")];
+/// let leader_title = RGrammar::parse("[leader_role] [leader_name] of [leader_homeland]").unwrap();
+/// let event_text = rgrammar![RGrammarPart::subgrammar(leader_title), RGrammarPart::text(" left in search of the "), RGrammarPart::param("artifact".into())];
 /// 
 /// let mut params = HashMap::new();
-/// params.insert("leader_name", "Arthur".to_string());
-/// params.insert("leader_role", "King".to_string());
-/// params.insert("leader_homeland", "Camelot".to_string());
-/// params.insert("artifact", "Holy Grail".to_string());
+/// params.insert("leader_name".into(), "Arthur".to_string());
+/// params.insert("leader_role".into(), "King".to_string());
+/// params.insert("leader_homeland".into(), "Camelot".to_string());
+/// params.insert("artifact".into(), "Holy Grail".to_string());
 /// 
 /// let s = event_text.expand(&params).unwrap();
 /// // -> "King Arthur of Camelot left in search of the Holy Grail"
 /// ```
+#[derive(Debug)]
 pub struct RGrammar<K: ParameterKey> {
     parts: Vec<RGrammarPart<K>>
 }
@@ -55,6 +57,7 @@ impl<K: ParameterKey> RGrammar<K> {
 
 /// Provides a shorthand for creating an RGrammar
 /// from a list of components.
+#[macro_export]
 macro_rules! rgrammar {
     ($($a:expr),*) => {
         RGrammar::new(vec![$($a),*])
@@ -63,19 +66,71 @@ macro_rules! rgrammar {
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum RGrammarParseError {
-    UnterminatedParameter(String)
+    UnmatchedParameterDelimiter,
+    NestedParameterDelimiter,
+    EmptyParameter,
 }
 
-impl RGrammar<&str> {
+impl RGrammar<String> {
     /// Parses a simple grammar where strings are used
     /// as parameter keys (and therefore no mapping is required).
-    fn parse(s: &str) -> Result<Self, RGrammarParseError> {
-        Ok(RGrammar::<&str> {
-            parts: vec![]
-        })
+    pub fn parse(s: &str) -> Result<Self, RGrammarParseError> {
+        let mut parts = Vec::new();
+        let mut current = String::new();
+        let mut in_param = false;
+
+        for c in s.chars() {
+            match c {
+                '[' => {
+                    if in_param {
+                        return Err(RGrammarParseError::NestedParameterDelimiter);
+                    }
+
+                    if current.len() > 0 {
+                        parts.push(RGrammarPart::text(&current));
+                        current.clear();
+                    }
+                    in_param = true;
+                }
+                ']' => {
+                    if !in_param {
+                        return Err(RGrammarParseError::UnmatchedParameterDelimiter)
+                    }
+                    else if current.len() == 0 {
+                        return Err(RGrammarParseError::EmptyParameter)
+                    }
+
+                    parts.push(RGrammarPart::Parameter(current.clone()));
+                    current.clear();
+                    in_param = false;
+                }
+                _ => {
+                    if in_param {
+                        current.push(c);
+                    }
+                    else {
+                        current.push(c);
+                    }
+                }
+            }
+        }
+
+        // If we've reached here while still parsing a parameter,
+        // we're missing a delimiter.
+        if in_param {
+            return Err(RGrammarParseError::UnmatchedParameterDelimiter)
+        }
+
+        // Otherwise we may have a text element that needs adding.
+        if current.len() > 0 {
+            parts.push(RGrammarPart::text(&current))
+        }
+
+        Ok(RGrammar::new(parts))
     }
 }
 
+#[derive(Debug)]
 pub enum RGrammarPart<K: ParameterKey> {
     Text(String),
     Parameter(K),
@@ -150,12 +205,21 @@ mod tests {
     /// Tests that a grammar can be parsed from a string.
     #[test]
     fn test_simple_parse() {
-        let g = RGrammar::parse("[name] is currently [action]").unwrap();
+        let g = RGrammar::parse("[name] is [action] at the moment").unwrap();
 
         let mut params = HashMap::new();
-        params.insert("name", "Steve".to_string());
-        params.insert("action", "gardening".to_string());
+        params.insert("name".to_string(), "Steve".to_string());
+        params.insert("action".to_string(), "gardening".to_string());
 
-        assert_eq!("Steve is currently gardening", &g.expand(&params).unwrap());
+        assert_eq!("Steve is gardening at the moment", &g.expand(&params).unwrap());
+    }
+
+    /// Tests various parsing error cases.
+    #[test]
+    fn test_parse_errors() {
+        assert_eq!(RGrammarParseError::UnmatchedParameterDelimiter, RGrammar::parse("Hello [name").unwrap_err());
+        assert_eq!(RGrammarParseError::UnmatchedParameterDelimiter, RGrammar::parse("name] is here!").unwrap_err());
+        assert_eq!(RGrammarParseError::EmptyParameter, RGrammar::parse("[] is here!").unwrap_err());
+        assert_eq!(RGrammarParseError::NestedParameterDelimiter, RGrammar::parse("[[name]] is here!").unwrap_err());
     }
 }
