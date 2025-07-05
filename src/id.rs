@@ -4,6 +4,7 @@ use std::collections::HashMap;
 pub trait IdValue: Unsigned + Integer + Copy {}
 impl<T> IdValue for T where T: Unsigned + Integer + Copy {}
 
+#[derive(Clone, Copy, Debug)]
 pub enum IdError {
     Duplicate,
     NonExistent
