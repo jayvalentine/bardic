@@ -63,12 +63,12 @@ impl<T: IdValue> IdManager<T> {
     /// ```
     pub fn create(&mut self, id_str: &str) -> Result<Id<T>, ()> {
         if self.ids.contains_key(id_str) {
-            return Err(());
+            Err(())
         } else {
             let id = Id::<T>(self.next_id_value);
             self.ids.insert(id_str.to_string(), self.next_id_value);
             self.next_id_value = self.next_id_value + T::one();
-            return Ok(id);
+            Ok(id)
         }
     }
 
@@ -90,10 +90,9 @@ impl<T: IdValue> IdManager<T> {
     /// // -> Err
     /// ```
     pub fn reference(&self, id_str: &str) -> Result<IdRef<T>, ()> {
-        if self.ids.contains_key(id_str) {
-            Ok(IdRef::<T>(*self.ids.get(id_str).unwrap()))
-        } else {
-            Err(())
+        match self.ids.get(id_str) {
+            Some(v) => Ok(IdRef::<T>(*v)),
+            None => Err(())
         }
     }
 }
