@@ -44,37 +44,25 @@ impl<K: ParameterKey> RGrammar<K> {
         RGrammar { parts }
     }
 
-    /// Expand this grammar given a map of parameter keys => values.
-    pub fn expand(&self, params: &HashMap<K, String>) -> Result<String, RGrammarExpandError<K>> {
+    /// Expand this grammar given a function to map parameter keys to values.
+    /// 
+    /// The function should return Some(value) when given a valid key,
+    /// and None when given an invalid key.
+    pub fn expand_with(&self, f: &dyn Fn(&K) -> Option<String>) -> Result<String, RGrammarExpandError<K>> {
         let mut strings = Vec::new();
         for p in &self.parts {
-            strings.push(p.expand(params)?);
+            strings.push(p.expand_with(f)?);
         }
 
         Ok(strings.join(""))
     }
-}
 
-/// Provides a shorthand for creating an RGrammar
-/// from a list of components.
-#[macro_export]
-macro_rules! rgrammar {
-    ($($a:expr),*) => {
-        RGrammar::new(vec![$($a),*])
-    };
-}
+    /// Expand this grammar given a map of parameter keys => values.
+    pub fn expand(&self, params: &HashMap<K, String>) -> Result<String, RGrammarExpandError<K>> {
+        self.expand_with(&|p| { params.get(p).cloned() })
+    }
 
-#[derive(PartialEq, Eq, Debug)]
-pub enum RGrammarParseError {
-    UnmatchedParameterDelimiter,
-    NestedParameterDelimiter,
-    EmptyParameter,
-}
-
-impl RGrammar<String> {
-    /// Parses a simple grammar where strings are used
-    /// as parameter keys (and therefore no mapping is required).
-    pub fn parse(s: &str) -> Result<Self, RGrammarParseError> {
+    pub fn parse_with(s: &str, f: &dyn Fn(&str) -> K) -> Result<RGrammar<K>, RGrammarParseError> {
         let mut parts = Vec::new();
         let mut current = String::new();
         let mut in_param = false;
@@ -100,7 +88,7 @@ impl RGrammar<String> {
                         return Err(RGrammarParseError::EmptyParameter)
                     }
 
-                    parts.push(RGrammarPart::Parameter(current.clone()));
+                    parts.push(RGrammarPart::Parameter(f(&current)));
                     current.clear();
                     in_param = false;
                 }
@@ -130,6 +118,30 @@ impl RGrammar<String> {
     }
 }
 
+/// Provides a shorthand for creating an RGrammar
+/// from a list of components.
+#[macro_export]
+macro_rules! rgrammar {
+    ($($a:expr),*) => {
+        RGrammar::new(vec![$($a),*])
+    };
+}
+
+#[derive(PartialEq, Eq, Debug)]
+pub enum RGrammarParseError {
+    UnmatchedParameterDelimiter,
+    NestedParameterDelimiter,
+    EmptyParameter,
+}
+
+impl RGrammar<String> {
+    /// Parses a simple grammar where strings are used
+    /// as parameter keys (and therefore no mapping is required).
+    pub fn parse(s: &str) -> Result<Self, RGrammarParseError> {
+        RGrammar::<String>::parse_with(s, &|p| { String::from(p) })
+    }
+}
+
 #[derive(Debug)]
 pub enum RGrammarPart<K: ParameterKey> {
     Text(String),
@@ -153,14 +165,14 @@ impl<K: ParameterKey> RGrammarPart<K> {
         RGrammarPart::<K>::SubGrammar(g)
     }
 
-    pub fn expand(&self, params: &HashMap<K, String>) -> Result<String, RGrammarExpandError<K>> {
+    pub fn expand_with(&self, f: &dyn Fn(&K) -> Option<String>) -> Result<String, RGrammarExpandError<K>> {
         match self {
             Self::Text(t) => Ok(t.clone()),
-            Self::Parameter(k) => match params.get(k) {
+            Self::Parameter(k) => match f(&k) {
                 Some(v) => Ok(v.clone()),
                 None => Err(RGrammarExpandError::UndefinedArgument(k.clone()))
             },
-            Self::SubGrammar(g) => g.expand(params)
+            Self::SubGrammar(g) => g.expand_with(f)
         }
     }
 }
@@ -221,5 +233,43 @@ mod tests {
         assert_eq!(RGrammarParseError::UnmatchedParameterDelimiter, RGrammar::parse("name] is here!").unwrap_err());
         assert_eq!(RGrammarParseError::EmptyParameter, RGrammar::parse("[] is here!").unwrap_err());
         assert_eq!(RGrammarParseError::NestedParameterDelimiter, RGrammar::parse("[[name]] is here!").unwrap_err());
+    }
+
+    /// Test that a grammar can be parsed with a function to determine parameter keys.
+    #[test]
+    fn test_parse_with_function() {
+        let f = |p: &str| {
+            match p {
+                "a" => 0,
+                "b" => 1,
+                _ => 2
+            }
+        };
+
+        let g = RGrammar::parse_with("[a] is next to [b], which is next to [d]", &f).unwrap();
+
+        let mut params = HashMap::new();
+        params.insert(0, "foo".into());
+        params.insert(1, "bar".into());
+        params.insert(2, "baz".into());
+
+        assert_eq!("foo is next to bar, which is next to baz", g.expand(&params).unwrap());
+    }
+
+    /// Test that a grammar can be expanded with a function to determine parameter values.
+    #[test]
+    fn test_expand_with_function() {
+        let g = RGrammar::parse("Hello [name]!").unwrap();
+
+        let f = |p: &String| {
+            if p == "name" {
+                Some("Steve".into())
+            }
+            else {
+                None
+            }
+        };
+
+        assert_eq!("Hello Steve!", g.expand_with(&f).unwrap());
     }
 }
