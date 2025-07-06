@@ -63,9 +63,9 @@ impl<K: ParameterKey> RGrammar<K> {
         self.expand_with(&|p| { params.get(p).cloned() })
     }
 
-    /// Parse a string into a grammar using a function to determine parameter keys
+    /// Parse a string into a grammar using a function to determine sub-components
     /// from strings in the input.
-    pub fn parse_with(s: &str, f: &dyn Fn(&str) -> K) -> Result<RGrammar<K>, RGrammarParseError> {
+    pub fn parse_with(s: &str, f: &dyn Fn(&str) -> Option<RGrammarPart<K>>) -> Result<RGrammar<K>, RGrammarParseError> {
         let mut parts = Vec::new();
         let mut current = String::new();
         let mut in_param = false;
@@ -91,7 +91,7 @@ impl<K: ParameterKey> RGrammar<K> {
                         return Err(RGrammarParseError::EmptyParameter)
                     }
 
-                    parts.push(RGrammarPart::Parameter(f(&current)));
+                    parts.push(f(&current).ok_or(RGrammarParseError::UndefinedParameter)?);
                     current.clear();
                     in_param = false;
                 }
@@ -131,13 +131,14 @@ pub enum RGrammarParseError {
     UnmatchedParameterDelimiter,
     NestedParameterDelimiter,
     EmptyParameter,
+    UndefinedParameter
 }
 
 impl RGrammar<String> {
     /// Parses a simple grammar where strings are used
     /// as parameter keys (and therefore no mapping is required).
     pub fn parse(s: &str) -> Result<Self, RGrammarParseError> {
-        RGrammar::<String>::parse_with(s, &|p| { String::from(p) })
+        RGrammar::<String>::parse_with(s, &|p| { Some(RGrammarPart::param(String::from(p))) })
     }
 }
 
@@ -240,11 +241,12 @@ mod tests {
     #[test]
     fn test_parse_with_function() {
         let f = |p: &str| {
-            match p {
+            let p = match p {
                 "a" => 0,
                 "b" => 1,
                 _ => 2
-            }
+            };
+            Some(RGrammarPart::param(p))
         };
 
         let g = RGrammar::parse_with("[a] is next to [b], which is next to [d]", &f).unwrap();
@@ -272,5 +274,25 @@ mod tests {
         };
 
         assert_eq!("Hello Steve!", g.expand_with(&f).unwrap());
+    }
+
+    /// Test that a grammar can be parsed with a function that inserts other grammars.
+    #[test]
+    fn test_parse_with_function_subgrammar() {
+        let f = |p: &str| {
+            match p {
+                "a" => Some(RGrammarPart::param("a")),
+                "greeting" => Some(RGrammarPart::subgrammar(rgrammar![RGrammarPart::text("hello to "), RGrammarPart::Parameter("b")])),
+                _ => None
+            }
+        };
+
+        let g = RGrammar::parse_with("[a] says [greeting]", &f).unwrap();
+
+        let mut params = HashMap::new();
+        params.insert("a", "Steve".into());
+        params.insert("b", "Bob".into());
+
+        assert_eq!("Steve says hello to Bob", g.expand(&params).unwrap());
     }
 }
