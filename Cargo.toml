@@ -4,5 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+criterion = "0.5.1"
 num = "0.4.3"
 rand = "0.9.1"
+
+[[bench]]
+name = "benches"
+harness = false

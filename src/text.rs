@@ -41,7 +41,7 @@ pub struct RGrammar<K: ParameterKey> {
     rules: HashMap<String, RGrammarNode<K>>
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum RGrammarNode<K: ParameterKey> {
     Text(String),
     ParameterRef(K),
