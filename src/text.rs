@@ -9,8 +9,8 @@ impl<T> ParameterKey for T where T: Hash + Eq + Clone {}
 /// 
 /// A grammar is a collection of rules, each with a symbol.
 /// 
-/// Grammars can be constructed from strings or directly
-/// using sub-grammar objects (via the rgrammar! macro).
+/// Grammar rules can be parsed from strings or constructed
+/// directly via the rule! macro.
 /// 
 /// # Examples
 /// 
@@ -41,6 +41,7 @@ pub struct RGrammar<K: ParameterKey> {
     rules: HashMap<String, RGrammarNode<K>>
 }
 
+/// A single node in a grammar.
 #[derive(Clone, Debug)]
 pub enum RGrammarNode<K: ParameterKey> {
     Text(String),
@@ -49,6 +50,7 @@ pub enum RGrammarNode<K: ParameterKey> {
     List(Vec<RGrammarNode<K>>)
 }
 
+/// Error returned when expanding a grammar fails.
 #[derive(PartialEq, Eq, Debug)]
 pub enum RGrammarExpandError<K: ParameterKey> {
     /// The named rule is not known.
@@ -75,8 +77,7 @@ impl<K: ParameterKey> RGrammarNode<K> {
         }
     }
 
-    /// Parse a string into a grammar rule, using a function to assign
-    /// parameter keys.
+    /// Parse a string into a grammar rule, using a function to assign parameter keys.
     pub fn parse_with(s: &str, f: &dyn Fn(&str) -> Option<K>) -> Result<RGrammarNode<K>, RGrammarParseError> {
         let mut parts = Vec::new();
         let mut current = String::new();
@@ -153,6 +154,7 @@ impl<K: ParameterKey> RGrammarNode<K> {
 }
 
 impl RGrammarNode<String> {
+    /// Parse a string into a rule where parameter keys are strings.
     pub fn parse(s: &str) -> Result<RGrammarNode<String>, RGrammarParseError> {
         let f = |p: &str| { Some(p.to_string()) };
         RGrammarNode::<String>::parse_with(s, &f)
