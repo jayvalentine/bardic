@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
-use rand::Rng;
+use rand::{Rng, seq::IteratorRandom};
 
 pub trait ParameterKey: Hash + Eq + Clone {}
 impl<T> ParameterKey for T where T: Hash + Eq + Clone {}
@@ -77,24 +77,54 @@ pub enum RGrammarExpandError<K: ParameterKey> {
     UndefinedArgument(K)
 }
 
+struct RGrammarExpansion<T: TagKey> {
+    tags: HashSet<T>
+}
+
+impl<T: TagKey> RGrammarExpansion<T> {
+    fn new() -> Self {
+        let tags = HashSet::new();
+        Self { tags }
+    }
+
+    fn add_tags(&mut self, tags: &HashSet<T>) {
+        for t in tags { self.tags.insert(t.clone()); }
+    }
+
+    /// Does this expansion meet all constraints for the given node?
+    fn meets_constraints_for<P: ParameterKey>(&self, node: &RGrammarNode<P, T>) -> bool {
+        node.constraints.is_subset(&self.tags)
+    }
+}
+
+impl<T: TagKey> Default for RGrammarExpansion<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<Param: ParameterKey, Tag: TagKey> RGrammarNode<Param, Tag> {
     /// Expands this node given a set of rules and function providing parameter values.
-    fn expand_with<R: Rng>(&self, rules: &HashMap<String, Self>, rng: &mut R, f: &dyn Fn(&Param) -> Option<String>) -> Result<String, RGrammarExpandError<Param>> {
+    fn expand_with<R: Rng>(&self, exp: &mut RGrammarExpansion<Tag>, rules: &HashMap<String, Self>, rng: &mut R, f: &dyn Fn(&Param) -> Option<String>) -> Result<String, RGrammarExpandError<Param>> {
+        // Add this node's tags to the expansion.
+        exp.add_tags(&self.tags);
+
         match &self.inner {
             RGrammarNodeInner::Text(s) => Ok(s.to_string()),
             RGrammarNodeInner::ParameterRef(k) => f(&k).ok_or(RGrammarExpandError::UndefinedArgument(k.clone())),
-            RGrammarNodeInner::SymbolRef(s) => rules.get(s).ok_or(RGrammarExpandError::UnknownRule(s.into()))?.expand_with(rules, rng, f),
+            RGrammarNodeInner::SymbolRef(s) => rules.get(s).ok_or(RGrammarExpandError::UnknownRule(s.into()))?.expand_with(exp, rules, rng, f),
             RGrammarNodeInner::List(nodes) => {
                 let mut strings = Vec::new();
                 for n in nodes.iter() {
-                    let e = n.expand_with(rules, rng, f)?;
+                    let e = n.expand_with(exp, rules, rng, f)?;
                     strings.push(e);
                 }
                 Ok(strings.join(""))
             },
             RGrammarNodeInner::Choice(nodes) => {
-                let index = rng.random_range(0..nodes.len());
-                nodes.get(index).unwrap().expand_with(rules, rng, f)
+                let nodes = nodes.iter().filter(|n| exp.meets_constraints_for(n));
+
+                nodes.choose(rng).unwrap().expand_with(exp, rules, rng, f)
             }
         }
     }
@@ -274,8 +304,10 @@ impl<Param: ParameterKey, Tag: TagKey> RGrammar<Param, Tag> {
     /// The function should return Some(value) when given a valid key,
     /// and None when given an invalid key.
     pub fn expand_with<R: Rng>(&self, symbol: &str, rng: &mut R, f: &dyn Fn(&Param) -> Option<String>) -> Result<String, RGrammarExpandError<Param>> {
+        let mut exp = RGrammarExpansion::default();
+
         let rule = self.rules.get(symbol).ok_or(RGrammarExpandError::UnknownRule(symbol.into()))?;
-        Ok(rule.expand_with(&self.rules, rng, f)?)
+        Ok(rule.expand_with(&mut exp, &self.rules, rng, f)?)
     }
 
     /// Expand this grammar given a map of parameter keys => values.
@@ -445,5 +477,25 @@ mod tests {
         let g = simple_grammar::<String>(rule!(RGrammarNode::choice(vec![RGrammarNode::text("hello".into())])));
 
         assert_eq!("hello", g.expand("s", &mut StdRng::from_os_rng(), &HashMap::new()).unwrap());
+    }
+
+    /// Test that tags in nodes are considered during future expansion.
+    #[test]
+    fn test_choice_constraint() {
+        let n1 = RGrammarNode::text("first ".into()).with_tag(&1);
+        let n2 = RGrammarNode::choice(vec![RGrammarNode::text("second ".into()).with_constraint(&2), RGrammarNode::text("first ".into()).with_constraint(&1).with_tag(&2)]);
+        let n3 = RGrammarNode::choice(vec![RGrammarNode::text("first, second".into()).with_constraints(&[1, 2]), RGrammarNode::text("third".into()).with_constraint(&3)]);
+
+        let g = HashMap::from([("s".into(), rule![n1, n2, n3])]);
+        let g = RGrammar::<&str, _>::new(g);
+
+        let mut rng = StdRng::from_os_rng();
+
+        // Run the expansion many times to be sure of a failure
+        // if the constraints are not being considered.
+        for _ in 0..1000 {
+            let s = g.expand("s", &mut rng, &HashMap::new()).unwrap();
+            assert_eq!("first first first, second", s);
+        }
     }
 }
