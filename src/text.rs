@@ -7,18 +7,25 @@ impl<T> ParameterKey for T where T: Hash + Eq + Clone {}
 /// Represents a replacement grammar that can be expanded
 /// based on some set of properties.
 /// 
-/// Grammars can be constructed from strings or directly
-/// using sub-grammar objects (via the rgrammar! macro).
+/// A grammar is a collection of rules, each with a symbol.
+/// 
+/// Grammar rules can be parsed from strings or constructed
+/// directly via the rule! macro.
 /// 
 /// # Examples
 /// 
 /// ```
-/// use bardic::text::{RGrammar, RGrammarPart};
-/// use bardic::rgrammar;
+/// use bardic::text::{RGrammar, RGrammarNode};
+/// use bardic::rule;
 /// use std::collections::HashMap;
 /// 
-/// let leader_title = RGrammar::parse("[leader_role] [leader_name] of [leader_homeland]").unwrap();
-/// let event_text = rgrammar![RGrammarPart::subgrammar(leader_title), RGrammarPart::text(" left in search of the "), RGrammarPart::param("artifact".into())];
+/// let r1 = RGrammarNode::parse("[leader_role] [leader_name] of [leader_homeland]").unwrap();
+/// let r2 = rule![RGrammarNode::SymbolRef("leader_title".into()), RGrammarNode::Text(" left in search of the ".into()), RGrammarNode::ParameterRef("artifact".into())];
+/// 
+/// let g = RGrammar::new(HashMap::from([
+///     ("leader_title".into(), r1),
+///     ("event_text".into(), r2)
+/// ]));
 /// 
 /// let mut params = HashMap::new();
 /// params.insert("leader_name".into(), "Arthur".to_string());
@@ -26,74 +33,104 @@ impl<T> ParameterKey for T where T: Hash + Eq + Clone {}
 /// params.insert("leader_homeland".into(), "Camelot".to_string());
 /// params.insert("artifact".into(), "Holy Grail".to_string());
 /// 
-/// let s = event_text.expand(&params).unwrap();
+/// let s = g.expand("event_text", &params).unwrap();
 /// // -> "King Arthur of Camelot left in search of the Holy Grail"
 /// ```
 #[derive(Debug)]
 pub struct RGrammar<K: ParameterKey> {
-    parts: Vec<RGrammarPart<K>>
+    rules: HashMap<String, RGrammarNode<K>>
 }
 
+/// A single node in a grammar.
+#[derive(Clone, Debug)]
+pub enum RGrammarNode<K: ParameterKey> {
+    Text(String),
+    ParameterRef(K),
+    SymbolRef(String),
+    List(Vec<RGrammarNode<K>>)
+}
+
+/// Error returned when expanding a grammar fails.
 #[derive(PartialEq, Eq, Debug)]
-pub enum RGrammarExpandError<K: Hash + Clone> {
+pub enum RGrammarExpandError<K: ParameterKey> {
+    /// The named rule is not known.
+    UnknownRule(String),
+    /// The given argument key does not correspond to a value.
     UndefinedArgument(K)
 }
 
-impl<K: ParameterKey> RGrammar<K> {
-    /// Create a new replacement grammar from a vector of components.
-    pub fn new(parts: Vec<RGrammarPart<K>>) -> RGrammar<K> {
-        RGrammar { parts }
-    }
-
-    /// Expand this grammar given a function to map parameter keys to values.
-    /// 
-    /// The function should return Some(value) when given a valid key,
-    /// and None when given an invalid key.
-    pub fn expand_with(&self, f: &dyn Fn(&K) -> Option<String>) -> Result<String, RGrammarExpandError<K>> {
-        let mut strings = Vec::new();
-        for p in &self.parts {
-            strings.push(p.expand_with(f)?);
+impl<K: ParameterKey> RGrammarNode<K> {
+    /// Expands this node given a set of rules and function providing parameter values.
+    fn expand_with(&self, rules: &HashMap<String, RGrammarNode<K>>, f: &dyn Fn(&K) -> Option<String>) -> Result<String, RGrammarExpandError<K>> {
+        match self {
+            RGrammarNode::Text(s) => Ok(s.to_string()),
+            RGrammarNode::ParameterRef(k) => f(k).ok_or(RGrammarExpandError::UndefinedArgument(k.clone())),
+            RGrammarNode::SymbolRef(s) => rules.get(s).ok_or(RGrammarExpandError::UnknownRule(s.into()))?.expand_with(rules, f),
+            RGrammarNode::List(nodes) => {
+                let mut strings = Vec::new();
+                for n in nodes.iter() {
+                    let e = n.expand_with(rules, f)?;
+                    strings.push(e);
+                }
+                Ok(strings.join(""))
+            }
         }
-
-        Ok(strings.join(""))
     }
 
-    /// Expand this grammar given a map of parameter keys => values.
-    pub fn expand(&self, params: &HashMap<K, String>) -> Result<String, RGrammarExpandError<K>> {
-        self.expand_with(&|p| { params.get(p).cloned() })
-    }
-
-    /// Parse a string into a grammar using a function to determine sub-components
-    /// from strings in the input.
-    pub fn parse_with(s: &str, f: &dyn Fn(&str) -> Option<RGrammarPart<K>>) -> Result<RGrammar<K>, RGrammarParseError> {
+    /// Parse a string into a grammar rule, using a function to assign parameter keys.
+    pub fn parse_with(s: &str, f: &dyn Fn(&str) -> Option<K>) -> Result<RGrammarNode<K>, RGrammarParseError> {
         let mut parts = Vec::new();
         let mut current = String::new();
         let mut in_param = false;
+        let mut in_symbol = false;
 
         for c in s.chars() {
             match c {
                 '[' => {
-                    if in_param {
-                        return Err(RGrammarParseError::NestedParameterDelimiter);
+                    if in_param || in_symbol {
+                        return Err(RGrammarParseError::NestedDelimiter);
                     }
 
                     if !current.is_empty() {
-                        parts.push(RGrammarPart::text(&current));
+                        parts.push(RGrammarNode::Text(current.clone()));
                         current.clear();
                     }
                     in_param = true;
                 }
                 ']' => {
                     if !in_param {
-                        return Err(RGrammarParseError::UnmatchedParameterDelimiter)
+                        return Err(RGrammarParseError::UnmatchedDelimiter)
                     }
                     else if current.is_empty() {
-                        return Err(RGrammarParseError::EmptyParameter)
+                        return Err(RGrammarParseError::EmptyDelimiter)
                     }
 
-                    parts.push(f(&current).ok_or(RGrammarParseError::UndefinedParameter)?);
+                    parts.push(RGrammarNode::ParameterRef(f(&current).ok_or(RGrammarParseError::UndefinedParameter)?));
                     current.clear();
                     in_param = false;
+                }
+                '{' => {
+                    if in_param || in_symbol {
+                        return Err(RGrammarParseError::NestedDelimiter);
+                    }
+
+                    if !current.is_empty() {
+                        parts.push(RGrammarNode::Text(current.clone()));
+                        current.clear();
+                    }
+                    in_symbol = true;
+                }
+                '}' => {
+                    if !in_symbol {
+                        return Err(RGrammarParseError::UnmatchedDelimiter);
+                    }
+                    else if current.is_empty() {
+                        return Err(RGrammarParseError::EmptyDelimiter)
+                    }
+
+                    parts.push(RGrammarNode::SymbolRef(current.clone()));
+                    current.clear();
+                    in_symbol = false;
                 }
                 _ => {
                     current.push(c);
@@ -104,137 +141,138 @@ impl<K: ParameterKey> RGrammar<K> {
         // If we've reached here while still parsing a parameter,
         // we're missing a delimiter.
         if in_param {
-            return Err(RGrammarParseError::UnmatchedParameterDelimiter)
+            return Err(RGrammarParseError::UnmatchedDelimiter)
         }
 
         // Otherwise we may have a text element that needs adding.
         if !current.is_empty() {
-            parts.push(RGrammarPart::text(&current))
+            parts.push(RGrammarNode::Text(current.into()))
         }
 
-        Ok(RGrammar::new(parts))
+        Ok(RGrammarNode::List(parts))
+    }
+}
+
+impl RGrammarNode<String> {
+    /// Parse a string into a rule where parameter keys are strings.
+    pub fn parse(s: &str) -> Result<RGrammarNode<String>, RGrammarParseError> {
+        let f = |p: &str| { Some(p.to_string()) };
+        RGrammarNode::<String>::parse_with(s, &f)
+    }
+}
+
+impl<K: ParameterKey> RGrammar<K> {
+    /// Create a new replacement grammar from a set of rules.
+    pub fn new(rules: HashMap<String, RGrammarNode<K>>) -> RGrammar<K> {
+        RGrammar { rules }
+    }
+
+    /// Expand this grammar given a function to map parameter keys to values.
+    /// 
+    /// The function should return Some(value) when given a valid key,
+    /// and None when given an invalid key.
+    pub fn expand_with(&self, symbol: &str, f: &dyn Fn(&K) -> Option<String>) -> Result<String, RGrammarExpandError<K>> {
+        let rule = self.rules.get(symbol).ok_or(RGrammarExpandError::UnknownRule(symbol.into()))?;
+        Ok(rule.expand_with(&self.rules, f)?)
+    }
+
+    /// Expand this grammar given a map of parameter keys => values.
+    pub fn expand(&self, symbol: &str, params: &HashMap<K, String>) -> Result<String, RGrammarExpandError<K>> {
+        self.expand_with(symbol, &|p| { params.get(p).cloned() })
     }
 }
 
 /// Provides a shorthand for creating an RGrammar
 /// from a list of components.
 #[macro_export]
-macro_rules! rgrammar {
+macro_rules! rule {
     ($($a:expr),*) => {
-        RGrammar::new(vec![$($a),*])
+        RGrammarNode::List(vec![$($a),*])
     };
 }
 
 /// Error returned when parsing a grammar from a string fails.
 #[derive(PartialEq, Eq, Debug)]
 pub enum RGrammarParseError {
-    UnmatchedParameterDelimiter,
-    NestedParameterDelimiter,
-    EmptyParameter,
+    /// A parameter/symbol delimiter is not matched.
+    UnmatchedDelimiter,
+    /// A parameter/symbol is nested within another parameter/symbol.
+    NestedDelimiter,
+    /// A parameter/symbol token is empty.
+    EmptyDelimiter,
+    /// The given parameter string does not correspond to a valid key.
     UndefinedParameter
-}
-
-impl RGrammar<String> {
-    /// Parses a simple grammar where strings are used
-    /// as parameter keys (and therefore no mapping is required).
-    pub fn parse(s: &str) -> Result<Self, RGrammarParseError> {
-        RGrammar::<String>::parse_with(s, &|p| { Some(RGrammarPart::param(String::from(p))) })
-    }
-}
-
-/// A part of a replacement grammar.
-#[derive(Debug)]
-pub enum RGrammarPart<K: ParameterKey> {
-    Text(String),
-    Parameter(K),
-    SubGrammar(RGrammar<K>),
-}
-
-impl<K: ParameterKey> RGrammarPart<K> {
-    /// Create a grammar part representing literal text.
-    pub fn text(s: &str) -> RGrammarPart<K> {
-        RGrammarPart::<K>::Text(s.to_string())
-    }
-
-    /// Create a grammar part representing a parameter.
-    pub fn param(k: K) -> RGrammarPart<K> {
-        RGrammarPart::<K>::Parameter(k)
-    }
-
-    /// Create a grammar part referencing another grammar.
-    pub fn subgrammar(g: RGrammar<K>) -> RGrammarPart<K> {
-        RGrammarPart::<K>::SubGrammar(g)
-    }
-
-    pub fn expand_with(&self, f: &dyn Fn(&K) -> Option<String>) -> Result<String, RGrammarExpandError<K>> {
-        match self {
-            Self::Text(t) => Ok(t.clone()),
-            Self::Parameter(k) => match f(k) {
-                Some(v) => Ok(v.clone()),
-                None => Err(RGrammarExpandError::UndefinedArgument(k.clone()))
-            },
-            Self::SubGrammar(g) => g.expand_with(f)
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn simple_grammar<K: ParameterKey>(r: RGrammarNode<K>) -> RGrammar<K> {
+        RGrammar::new(HashMap::from([("s".into(), r)]))
+    }
+
     /// Tests simple grammar expansion.
     #[test]
     fn test_simple_grammar() {
-        let g = rgrammar![RGrammarPart::param("name"), RGrammarPart::text(" is here!")];
+        let g = simple_grammar(rule![RGrammarNode::ParameterRef("name"), RGrammarNode::Text(" is here!".into())]);
 
         let mut params = HashMap::new();
         params.insert("name", "Bob".to_string());
 
-        assert_eq!("Bob is here!", &g.expand(&params).unwrap());
+        assert_eq!("Bob is here!", &g.expand("s", &params).unwrap());
     }
 
     /// Tests that a sensible error is returned when expansion fails.
     #[test]
     fn test_expansion_error() {
-        let g = rgrammar![RGrammarPart::param("foo")];
+        let g = simple_grammar(rule![RGrammarNode::ParameterRef("foo")]);
         let params = HashMap::new();
         
-        let e = g.expand(&params);
+        let e = g.expand("s", &params);
         assert_eq!(Err(RGrammarExpandError::UndefinedArgument("foo")), e);
     }
 
     /// Tests that grammars can be expanded recursively.
     #[test]
     fn test_recursive() {
-        let sg = rgrammar![RGrammarPart::param("name"), RGrammarPart::text(" of "), RGrammarPart::param("place")];
-        let g = rgrammar![RGrammarPart::text("Hello "), RGrammarPart::subgrammar(sg), RGrammarPart::text("!")];
+        let rule_title = rule![RGrammarNode::ParameterRef("name"), RGrammarNode::Text(" of ".into()), RGrammarNode::ParameterRef("place")];
+        let rule_greeting = rule![RGrammarNode::Text("Hello ".into()), RGrammarNode::SymbolRef("title".into()), RGrammarNode::Text("!".into())];
+
+        let rules = HashMap::from([
+            ("title".into(), rule_title),
+            ("greeting".into(), rule_greeting)
+        ]);
+
+        let g = RGrammar::new(rules);
 
         let mut params = HashMap::new();
         params.insert("name", "Bob".to_string());
         params.insert("place", "Halifax".to_string());
 
-        assert_eq!("Hello Bob of Halifax!", &g.expand(&params).unwrap())
+        assert_eq!("Hello Bob of Halifax!", &g.expand("greeting", &params).unwrap())
     }
 
-    /// Tests that a grammar can be parsed from a string.
+    /// Tests that a grammar rule can be parsed from a string.
     #[test]
     fn test_simple_parse() {
-        let g = RGrammar::parse("[name] is [action] at the moment").unwrap();
+        let g = simple_grammar(RGrammarNode::parse("[name] is [action] at the moment").unwrap());
 
         let mut params = HashMap::new();
         params.insert("name".to_string(), "Steve".to_string());
         params.insert("action".to_string(), "gardening".to_string());
 
-        assert_eq!("Steve is gardening at the moment", &g.expand(&params).unwrap());
+        assert_eq!("Steve is gardening at the moment", &g.expand("s", &params).unwrap());
     }
 
     /// Tests various parsing error cases.
     #[test]
     fn test_parse_errors() {
-        assert_eq!(RGrammarParseError::UnmatchedParameterDelimiter, RGrammar::parse("Hello [name").unwrap_err());
-        assert_eq!(RGrammarParseError::UnmatchedParameterDelimiter, RGrammar::parse("name] is here!").unwrap_err());
-        assert_eq!(RGrammarParseError::EmptyParameter, RGrammar::parse("[] is here!").unwrap_err());
-        assert_eq!(RGrammarParseError::NestedParameterDelimiter, RGrammar::parse("[[name]] is here!").unwrap_err());
+        assert_eq!(RGrammarParseError::UnmatchedDelimiter, RGrammarNode::parse("Hello [name").unwrap_err());
+        assert_eq!(RGrammarParseError::UnmatchedDelimiter, RGrammarNode::parse("name] is here!").unwrap_err());
+        assert_eq!(RGrammarParseError::EmptyDelimiter, RGrammarNode::parse("[] is here!").unwrap_err());
+        assert_eq!(RGrammarParseError::NestedDelimiter, RGrammarNode::parse("[[name]] is here!").unwrap_err());
+        assert_eq!(RGrammarParseError::NestedDelimiter, RGrammarNode::parse("[{name}] is here!").unwrap_err());
     }
 
     /// Test that a grammar can be parsed with a function to determine parameter keys.
@@ -246,23 +284,23 @@ mod tests {
                 "b" => 1,
                 _ => 2
             };
-            Some(RGrammarPart::param(p))
+            Some(p)
         };
 
-        let g = RGrammar::parse_with("[a] is next to [b], which is next to [d]", &f).unwrap();
+        let g = simple_grammar(RGrammarNode::parse_with("[a] is next to [b], which is next to [d]", &f).unwrap());
 
         let mut params = HashMap::new();
         params.insert(0, "foo".into());
         params.insert(1, "bar".into());
         params.insert(2, "baz".into());
 
-        assert_eq!("foo is next to bar, which is next to baz", g.expand(&params).unwrap());
+        assert_eq!("foo is next to bar, which is next to baz", g.expand("s", &params).unwrap());
     }
 
     /// Test that a grammar can be expanded with a function to determine parameter values.
     #[test]
     fn test_expand_with_function() {
-        let g = RGrammar::parse("Hello [name]!").unwrap();
+        let g = simple_grammar(RGrammarNode::parse("Hello [name]!").unwrap());
 
         let f = |p: &String| {
             if p == "name" {
@@ -273,26 +311,25 @@ mod tests {
             }
         };
 
-        assert_eq!("Hello Steve!", g.expand_with(&f).unwrap());
+        assert_eq!("Hello Steve!", g.expand_with("s", &f).unwrap());
     }
 
-    /// Test that a grammar can be parsed with a function that inserts other grammars.
+    /// Test that grammar rules can be parsed with references to other rules.
     #[test]
     fn test_parse_with_function_subgrammar() {
-        let f = |p: &str| {
-            match p {
-                "a" => Some(RGrammarPart::param("a")),
-                "greeting" => Some(RGrammarPart::subgrammar(rgrammar![RGrammarPart::text("hello to "), RGrammarPart::Parameter("b")])),
-                _ => None
-            }
-        };
+        let r1 = RGrammarNode::parse("hello to [b]").unwrap();
+        let r2 = RGrammarNode::parse("[a] says {greeting}").unwrap();
 
-        let g = RGrammar::parse_with("[a] says [greeting]", &f).unwrap();
+        let rules = HashMap::from([
+            ("greeting".into(), r1),
+            ("s".into(), r2)
+        ]);
+        let g = RGrammar::new(rules);
 
         let mut params = HashMap::new();
-        params.insert("a", "Steve".into());
-        params.insert("b", "Bob".into());
+        params.insert("a".into(), "Steve".into());
+        params.insert("b".into(), "Bob".into());
 
-        assert_eq!("Steve says hello to Bob", g.expand(&params).unwrap());
+        assert_eq!("Steve says hello to Bob", g.expand("s", &params).unwrap());
     }
 }
