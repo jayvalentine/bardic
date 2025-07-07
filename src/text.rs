@@ -43,7 +43,8 @@ pub enum RGrammarExpandError<K: ParameterKey> {
 /// Represents a replacement grammar that can be expanded
 /// based on some set of properties.
 /// 
-/// A grammar is a collection of rules, each with a symbol.
+/// A grammar is a collection of rules, each with a symbol,
+/// and represents a "possibility space" of different string outputs.
 /// 
 /// Grammar rules can be parsed from strings or constructed
 /// directly via the rule! macro.
@@ -74,7 +75,7 @@ pub enum RGrammarExpandError<K: ParameterKey> {
 /// params.insert("leader_homeland".into(), "Camelot".to_string());
 /// params.insert("artifact".into(), "Holy Grail".to_string());
 /// 
-/// // Expand the grammar, using an RNG to resolve any random choices.
+/// // Expand the grammar into a concrete instance.
 /// let mut rng = StdRng::from_os_rng();
 /// let s = g.expand("event_text", &mut rng, &params).unwrap();
 /// // -> "King Arthur of Camelot left in search of the Holy Grail"
@@ -365,8 +366,8 @@ impl<T: TagKey> Default for RGrammarExpansion<T> {
     }
 }
 
-/// Provides a shorthand for creating an RGrammar
-/// from a list of components.
+/// Provides a shorthand for creating an [RGrammarNode]
+/// from a list of sub-nodes.
 #[macro_export]
 macro_rules! rule {
     ($($a:expr),*) => {

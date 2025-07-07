@@ -19,7 +19,6 @@ pub enum IdError {
     NonExistent
 }
 
-/// An ID.
 /// Each ID should be unique within a given system.
 /// 
 /// IDs cannot be compared with one another because by definition
