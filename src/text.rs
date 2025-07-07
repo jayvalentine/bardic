@@ -2,16 +2,49 @@ use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use rand::{Rng, seq::IteratorRandom};
 
+/// Types implementing this trait can be used as keys
+/// for parameters when expanding a grammar.
+/// 
+/// This trait is automatically implemented on any type
+/// satisfying the constraints.
 pub trait ParameterKey: Hash + Eq + Clone {}
 impl<T> ParameterKey for T where T: Hash + Eq + Clone {}
 
+/// Types implementing this trait can be used as keys
+/// for tags when expanding a grammar.
+/// 
+/// This trait is automatically implemented on any type
+/// satisfying the constraints.
 pub trait TagKey: Hash + Eq + Clone {}
 impl<T> TagKey for T where T: Hash + Eq + Clone {}
+
+/// Error returned when parsing a grammar from a string fails.
+#[derive(PartialEq, Eq, Debug)]
+pub enum RGrammarParseError {
+    /// A parameter/symbol delimiter is not matched.
+    UnmatchedDelimiter,
+    /// A parameter/symbol is nested within another parameter/symbol.
+    NestedDelimiter,
+    /// A parameter/symbol token is empty.
+    EmptyDelimiter,
+    /// The given parameter string does not correspond to a valid key.
+    UndefinedParameter
+}
+
+/// Error returned when expanding a grammar fails.
+#[derive(PartialEq, Eq, Debug)]
+pub enum RGrammarExpandError<K: ParameterKey> {
+    /// The named rule is not known.
+    UnknownRule(String),
+    /// The given argument key does not correspond to a value.
+    UndefinedArgument(K)
+}
 
 /// Represents a replacement grammar that can be expanded
 /// based on some set of properties.
 /// 
-/// A grammar is a collection of rules, each with a symbol.
+/// A grammar is a collection of rules, each with a symbol,
+/// and represents a "possibility space" of different string outputs.
 /// 
 /// Grammar rules can be parsed from strings or constructed
 /// directly via the rule! macro.
@@ -25,10 +58,11 @@ impl<T> TagKey for T where T: Hash + Eq + Clone {}
 /// use rand::SeedableRng;
 /// use rand::rngs::StdRng;
 /// 
-/// // Create the grammar from a collection of rules.
+/// // Create rules for the grammar.
 /// let r1 = RGrammarNode::parse("[leader_role] [leader_name] of [leader_homeland]").unwrap();
 /// let r2 = rule![RGrammarNode::symbol("leader_title".into()), RGrammarNode::text(" left in search of the ".into()), RGrammarNode::param("artifact".into())];
 /// 
+/// // Create grammar by assigning symbols to each rule.
 /// let g = RGrammar::new(HashMap::from([
 ///     ("leader_title".into(), r1),
 ///     ("event_text".into(), r2)
@@ -41,7 +75,7 @@ impl<T> TagKey for T where T: Hash + Eq + Clone {}
 /// params.insert("leader_homeland".into(), "Camelot".to_string());
 /// params.insert("artifact".into(), "Holy Grail".to_string());
 /// 
-/// // Expand the grammar, using an RNG to resolve any random choices.
+/// // Expand the grammar into a concrete instance.
 /// let mut rng = StdRng::from_os_rng();
 /// let s = g.expand("event_text", &mut rng, &params).unwrap();
 /// // -> "King Arthur of Camelot left in search of the Holy Grail"
@@ -51,6 +85,45 @@ pub struct RGrammar<Param: ParameterKey, Tag: TagKey> {
     rules: HashMap<String, RGrammarNode<Param, Tag>>
 }
 
+
+impl<Param: ParameterKey, Tag: TagKey> RGrammar<Param, Tag> {
+    /// Create a new replacement grammar from a set of rules.
+    /// 
+    /// Rules within the grammar are defined as [RGrammarNode]
+    /// instances and then assigned symbols in a HashMap.
+    /// 
+    /// The grammar object can then be constructed from this map.
+    pub fn new(rules: HashMap<String, RGrammarNode<Param, Tag>>) -> RGrammar<Param, Tag> {
+        RGrammar { rules }
+    }
+
+    /// Expand this grammar given an RNG and function to map parameter keys to values.
+    ///
+    /// The RNG is used to resolve choices.
+    ///
+    /// The function should return Some(value) when given a valid key,
+    /// and None when given an invalid key.
+    /// 
+    /// If successful, the expanded string is returned.
+    /// If not, an error is returned that describes the reason why the grammar
+    /// could not be expanded.
+    pub fn expand_with<R: Rng>(&self, symbol: &str, rng: &mut R, f: &dyn Fn(&Param) -> Option<String>) -> Result<String, RGrammarExpandError<Param>> {
+        let mut exp = RGrammarExpansion::default();
+
+        let rule = self.rules.get(symbol).ok_or(RGrammarExpandError::UnknownRule(symbol.into()))?;
+        Ok(rule.expand_with(&mut exp, &self.rules, rng, f)?)
+    }
+
+    /// Expand this grammar given a map of parameter keys => values.
+    /// 
+    /// This is equivalent to [RGrammar::expand_with] using a function that looks up
+    /// parameter values in the map.
+    pub fn expand<R: Rng>(&self, symbol: &str, rng: &mut R, params: &HashMap<Param, String>) -> Result<String, RGrammarExpandError<Param>> {
+        self.expand_with(symbol, rng, &|p| { params.get(p).cloned() })
+    }
+}
+
+/// A single node in a grammar.
 #[derive(Clone, Debug)]
 pub struct RGrammarNode<Param: ParameterKey, Tag: TagKey> {
     tags: HashSet<Tag>,
@@ -58,77 +131,7 @@ pub struct RGrammarNode<Param: ParameterKey, Tag: TagKey> {
     inner: RGrammarNodeInner<Param, Tag>
 }
 
-/// A single node in a grammar.
-#[derive(Clone, Debug)]
-enum RGrammarNodeInner<Param: ParameterKey, Tag: TagKey> {
-    Text(String),
-    ParameterRef(Param),
-    SymbolRef(String),
-    List(Vec<RGrammarNode<Param, Tag>>),
-    Choice(Vec<RGrammarNode<Param, Tag>>)
-}
-
-/// Error returned when expanding a grammar fails.
-#[derive(PartialEq, Eq, Debug)]
-pub enum RGrammarExpandError<K: ParameterKey> {
-    /// The named rule is not known.
-    UnknownRule(String),
-    /// The given argument key does not correspond to a value.
-    UndefinedArgument(K)
-}
-
-struct RGrammarExpansion<T: TagKey> {
-    tags: HashSet<T>
-}
-
-impl<T: TagKey> RGrammarExpansion<T> {
-    fn new() -> Self {
-        let tags = HashSet::new();
-        Self { tags }
-    }
-
-    fn add_tags(&mut self, tags: &HashSet<T>) {
-        for t in tags { self.tags.insert(t.clone()); }
-    }
-
-    /// Does this expansion meet all constraints for the given node?
-    fn meets_constraints_for<P: ParameterKey>(&self, node: &RGrammarNode<P, T>) -> bool {
-        node.constraints.is_subset(&self.tags)
-    }
-}
-
-impl<T: TagKey> Default for RGrammarExpansion<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl<Param: ParameterKey, Tag: TagKey> RGrammarNode<Param, Tag> {
-    /// Expands this node given a set of rules and function providing parameter values.
-    fn expand_with<R: Rng>(&self, exp: &mut RGrammarExpansion<Tag>, rules: &HashMap<String, Self>, rng: &mut R, f: &dyn Fn(&Param) -> Option<String>) -> Result<String, RGrammarExpandError<Param>> {
-        // Add this node's tags to the expansion.
-        exp.add_tags(&self.tags);
-
-        match &self.inner {
-            RGrammarNodeInner::Text(s) => Ok(s.to_string()),
-            RGrammarNodeInner::ParameterRef(k) => f(&k).ok_or(RGrammarExpandError::UndefinedArgument(k.clone())),
-            RGrammarNodeInner::SymbolRef(s) => rules.get(s).ok_or(RGrammarExpandError::UnknownRule(s.into()))?.expand_with(exp, rules, rng, f),
-            RGrammarNodeInner::List(nodes) => {
-                let mut strings = Vec::new();
-                for n in nodes.iter() {
-                    let e = n.expand_with(exp, rules, rng, f)?;
-                    strings.push(e);
-                }
-                Ok(strings.join(""))
-            },
-            RGrammarNodeInner::Choice(nodes) => {
-                let nodes = nodes.iter().filter(|n| exp.meets_constraints_for(n));
-
-                nodes.choose(rng).unwrap().expand_with(exp, rules, rng, f)
-            }
-        }
-    }
-
     /// Parse a string into a grammar rule, using a function to assign parameter keys.
     pub fn parse_with(s: &str, f: &dyn Fn(&str) -> Option<Param>) -> Result<Self, RGrammarParseError> {
         let mut parts = Vec::new();
@@ -209,16 +212,6 @@ impl<Param: ParameterKey, Tag: TagKey> RGrammarNode<Param, Tag> {
         Ok(Self { tags, constraints, inner })
     }
 
-    fn new(inner: RGrammarNodeInner<Param, Tag>) -> Self {
-        let tags = HashSet::new();
-        let constraints = HashSet::new();
-        Self {
-            tags,
-            constraints,
-            inner
-        }
-    }
-
     /// Create a list node with the given list of nodes.
     pub fn list(nodes: Vec<Self>) -> Self {
         let inner = RGrammarNodeInner::List(nodes);
@@ -272,14 +265,41 @@ impl<Param: ParameterKey, Tag: TagKey> RGrammarNode<Param, Tag> {
         for c in constraints { self.constraints.insert(c.clone()); }
         self
     }
-}
 
-impl<Param: ParameterKey, Tag: TagKey> From<RGrammarNodeInner<Param, Tag>> for RGrammarNode<Param, Tag> {
-    fn from(value: RGrammarNodeInner<Param, Tag>) -> Self {
+    fn new(inner: RGrammarNodeInner<Param, Tag>) -> Self {
         let tags = HashSet::new();
         let constraints = HashSet::new();
-        let inner = value;
-        Self { tags, constraints, inner }
+        Self {
+            tags,
+            constraints,
+            inner
+        }
+    }
+
+    /// Expands this node given a set of rules and function providing parameter values.
+    /// Not intended to be used directly; instead the node is expanded by the RGrammar containing it.
+    fn expand_with<R: Rng>(&self, exp: &mut RGrammarExpansion<Tag>, rules: &HashMap<String, Self>, rng: &mut R, f: &dyn Fn(&Param) -> Option<String>) -> Result<String, RGrammarExpandError<Param>> {
+        // Add this node's tags to the expansion.
+        exp.add_tags(&self.tags);
+
+        match &self.inner {
+            RGrammarNodeInner::Text(s) => Ok(s.to_string()),
+            RGrammarNodeInner::ParameterRef(k) => f(&k).ok_or(RGrammarExpandError::UndefinedArgument(k.clone())),
+            RGrammarNodeInner::SymbolRef(s) => rules.get(s).ok_or(RGrammarExpandError::UnknownRule(s.into()))?.expand_with(exp, rules, rng, f),
+            RGrammarNodeInner::List(nodes) => {
+                let mut strings = Vec::new();
+                for n in nodes.iter() {
+                    let e = n.expand_with(exp, rules, rng, f)?;
+                    strings.push(e);
+                }
+                Ok(strings.join(""))
+            },
+            RGrammarNodeInner::Choice(nodes) => {
+                let nodes = nodes.iter().filter(|n| exp.meets_constraints_for(n));
+
+                nodes.choose(rng).unwrap().expand_with(exp, rules, rng, f)
+            }
+        }
     }
 }
 
@@ -291,51 +311,68 @@ impl RGrammarNode<String, String> {
     }
 }
 
-impl<Param: ParameterKey, Tag: TagKey> RGrammar<Param, Tag> {
-    /// Create a new replacement grammar from a set of rules.
-    pub fn new(rules: HashMap<String, RGrammarNode<Param, Tag>>) -> RGrammar<Param, Tag> {
-        RGrammar { rules }
-    }
-
-    /// Expand this grammar given an RNG and function to map parameter keys to values.
-    ///
-    /// The RNG is used to resolve choices.
-    ///
-    /// The function should return Some(value) when given a valid key,
-    /// and None when given an invalid key.
-    pub fn expand_with<R: Rng>(&self, symbol: &str, rng: &mut R, f: &dyn Fn(&Param) -> Option<String>) -> Result<String, RGrammarExpandError<Param>> {
-        let mut exp = RGrammarExpansion::default();
-
-        let rule = self.rules.get(symbol).ok_or(RGrammarExpandError::UnknownRule(symbol.into()))?;
-        Ok(rule.expand_with(&mut exp, &self.rules, rng, f)?)
-    }
-
-    /// Expand this grammar given a map of parameter keys => values.
-    pub fn expand<R: Rng>(&self, symbol: &str, rng: &mut R, params: &HashMap<Param, String>) -> Result<String, RGrammarExpandError<Param>> {
-        self.expand_with(symbol, rng, &|p| { params.get(p).cloned() })
+impl<Param: ParameterKey, Tag: TagKey> From<RGrammarNodeInner<Param, Tag>> for RGrammarNode<Param, Tag> {
+    fn from(value: RGrammarNodeInner<Param, Tag>) -> Self {
+        let tags = HashSet::new();
+        let constraints = HashSet::new();
+        let inner = value;
+        Self { tags, constraints, inner }
     }
 }
 
-/// Provides a shorthand for creating an RGrammar
-/// from a list of components.
+/// An inner type representing different kinds of grammar nodes.
+/// Should not be used directly. Use [RGrammarNode] instead.
+#[derive(Clone, Debug)]
+enum RGrammarNodeInner<Param: ParameterKey, Tag: TagKey> {
+    Text(String),
+    ParameterRef(Param),
+    SymbolRef(String),
+    List(Vec<RGrammarNode<Param, Tag>>),
+    Choice(Vec<RGrammarNode<Param, Tag>>)
+}
+
+/// The result of expanding a grammar.
+/// 
+/// An instance of this struct can be stored to deterministically
+/// render an output of the expanded grammar in future.
+pub struct RGrammarExpansion<T: TagKey> {
+    tags: HashSet<T>
+}
+
+impl<T: TagKey> RGrammarExpansion<T> {
+    /// Returns the tags created during expansion of the grammar.
+    pub fn tags(&self) -> &HashSet<T> {
+        &self.tags
+    }
+
+    fn new() -> Self {
+        let tags = HashSet::new();
+        Self { tags }
+    }
+
+    fn add_tags(&mut self, tags: &HashSet<T>) {
+        for t in tags { self.tags.insert(t.clone()); }
+    }
+
+    /// Does this expansion meet all constraints for the given node?
+    fn meets_constraints_for<P: ParameterKey>(&self, node: &RGrammarNode<P, T>) -> bool {
+        node.constraints.is_subset(&self.tags)
+    }
+}
+
+impl<T: TagKey> Default for RGrammarExpansion<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Provides a shorthand for creating an [RGrammarNode]
+/// from a list of sub-nodes.
 #[macro_export]
 macro_rules! rule {
     ($($a:expr),*) => {
         RGrammarNode::list(vec![$($a),*])
     };
-}
-
-/// Error returned when parsing a grammar from a string fails.
-#[derive(PartialEq, Eq, Debug)]
-pub enum RGrammarParseError {
-    /// A parameter/symbol delimiter is not matched.
-    UnmatchedDelimiter,
-    /// A parameter/symbol is nested within another parameter/symbol.
-    NestedDelimiter,
-    /// A parameter/symbol token is empty.
-    EmptyDelimiter,
-    /// The given parameter string does not correspond to a valid key.
-    UndefinedParameter
 }
 
 #[cfg(test)]
