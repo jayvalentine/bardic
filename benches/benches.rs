@@ -1,9 +1,12 @@
 use criterion::*;
-use bardic::text::*;
+use rand::rngs::StdRng;
+use rand::SeedableRng;
 use std::collections::HashMap;
 
-fn expand_grammar(g: &RGrammar<String>, symbol: &str, params: &HashMap<String, String>) {
-    g.expand(symbol, params).unwrap();
+use bardic::text::*;
+
+fn expand_grammar(g: &RGrammar<String, String>, rng: &mut StdRng, symbol: &str, params: &HashMap<String, String>) {
+    g.expand(symbol, rng, params).unwrap();
 }
 
 fn benchmark_grammar_expansion(c: &mut Criterion) {
@@ -25,7 +28,9 @@ fn benchmark_grammar_expansion(c: &mut Criterion) {
         p.insert(i.into(), format!("number {i}"));
     }
 
-    c.bench_function("grammar_expand", |b| b.iter(|| expand_grammar(&g, "text", &p)));
+    let mut rng = StdRng::from_os_rng();
+
+    c.bench_function("grammar_expand", |b| b.iter(|| expand_grammar(&g, &mut rng, "text", &p)));
 }
 
 criterion_group!(benches, benchmark_grammar_expansion);
