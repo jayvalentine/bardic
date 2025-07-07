@@ -13,8 +13,7 @@ properties of entities in your system.
 For example the grammar:
 
 ```
-event_text => [leader_title] left in search of the [artifact]
-
+event_text => {leader_title} left in search of the [artifact]
 leader_title => [leader_role] [leader_name] of [leader_homeland]
 ```
 
