@@ -1,12 +1,21 @@
 use num::{Unsigned, Integer};
 use std::collections::HashMap;
 
+/// Types implementing this trait can be used as IDs.
+/// IDs are required to be integer types so non-conflicting
+/// IDs can be easily computed.
+/// 
+/// This trait is automatically implemented on any type
+/// satisfying the constraints.
 pub trait IdValue: Unsigned + Integer + Copy {}
 impl<T> IdValue for T where T: Unsigned + Integer + Copy {}
 
+/// Errors that may occur when creating or referencing an ID.
 #[derive(Clone, Copy, Debug)]
 pub enum IdError {
+    /// The ID being created already exists.
     Duplicate,
+    /// The ID being referenced does not exist.
     NonExistent
 }
 
@@ -25,12 +34,16 @@ pub struct Id<T: Unsigned + Integer>(T);
 pub struct IdRef<T>(T);
 
 impl<T: IdValue> PartialEq<Id<T>> for IdRef<T> {
+    /// Compares for equality between this reference
+    /// and an ID. The two are considered equal if they
+    /// refer to the same underlying value.
     fn eq(&self, other: &Id<T>) -> bool {
         self.0 == other.0
     }
 }
 
 impl<T: IdValue> PartialEq for IdRef<T> {
+    /// Compares for equality between two ID references.
     fn eq(&self, other: &Self) -> bool {
         self.0 == other.0
     }
