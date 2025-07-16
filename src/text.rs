@@ -1,22 +1,23 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use rand::{Rng, seq::IteratorRandom};
+use std::fmt::Debug;
 
 /// Types implementing this trait can be used as keys
 /// for parameters when expanding a grammar.
 /// 
 /// This trait is automatically implemented on any type
 /// satisfying the constraints.
-pub trait ParameterKey: Hash + Eq + Clone {}
-impl<T> ParameterKey for T where T: Hash + Eq + Clone {}
+pub trait ParameterKey: Hash + Eq + Clone + Debug {}
+impl<T> ParameterKey for T where T: Hash + Eq + Clone + Debug {}
 
 /// Types implementing this trait can be used as keys
 /// for tags when expanding a grammar.
 /// 
 /// This trait is automatically implemented on any type
 /// satisfying the constraints.
-pub trait TagKey: Hash + Eq + Clone {}
-impl<T> TagKey for T where T: Hash + Eq + Clone {}
+pub trait TagKey: Hash + Eq + Clone + Debug {}
+impl<T> TagKey for T where T: Hash + Eq + Clone + Debug {}
 
 /// Error returned when parsing a grammar from a string fails.
 #[derive(PartialEq, Eq, Debug)]
@@ -97,29 +98,39 @@ impl<Param: ParameterKey, Tag: TagKey> RGrammar<Param, Tag> {
         RGrammar { rules }
     }
 
-    /// Expand this grammar given an RNG and function to map parameter keys to values.
-    ///
-    /// The RNG is used to resolve choices.
-    ///
-    /// The function should return Some(value) when given a valid key,
-    /// and None when given an invalid key.
+    /// Expand this grammar given an RNG (used to resolve choices).
     /// 
-    /// If successful, the expanded string is returned.
+    /// If successful, an expansion instance is returned.
     /// If not, an error is returned that describes the reason why the grammar
     /// could not be expanded.
-    pub fn expand_with<R: Rng>(&self, symbol: &str, rng: &mut R, f: &dyn Fn(&Param) -> Option<String>) -> Result<String, RGrammarExpandError<Param>> {
+    pub fn expand<R: Rng>(&self, symbol: &str, rng: &mut R) -> Result<RGrammarExpansion<Tag>, RGrammarExpandError<Param>> {
         let mut exp = RGrammarExpansion::default();
 
         let rule = self.rules.get(symbol).ok_or(RGrammarExpandError::UnknownRule(symbol.into()))?;
-        Ok(rule.expand_with(&mut exp, &self.rules, rng, f)?)
+        rule.expand(&mut exp, &self.rules, rng)?;
+
+        Ok(exp)
     }
 
-    /// Expand this grammar given a map of parameter keys => values.
+    /// Render the string represented by the given expansion of this grammar.
     /// 
-    /// This is equivalent to [RGrammar::expand_with] using a function that looks up
-    /// parameter values in the map.
-    pub fn expand<R: Rng>(&self, symbol: &str, rng: &mut R, params: &HashMap<Param, String>) -> Result<String, RGrammarExpandError<Param>> {
-        self.expand_with(symbol, rng, &|p| { params.get(p).cloned() })
+    /// Returns the rendered string if successful, or an error indicating why rendering
+    /// failed if not.
+    /// 
+    /// The parameter hash given is used to fill in parameterised values if encountered.
+    pub fn render(&self, expansion: &RGrammarExpansion<Tag>, params: &HashMap<Param, String>) -> Result<String, RGrammarExpandError<Param>> {
+        self.render_with(expansion, &|p| params.get(p).cloned())
+    }
+
+    /// Render the string represented by the given expansion of this grammar.
+    /// 
+    /// Returns the rendered string if successful, or an error indicating why rendering
+    /// failed if not.
+    /// 
+    /// The function `f` is used to fill in parameterised values if encountered.
+    /// This function should return `Some(String)` if the parameter is valid, and `None` if not.
+    pub fn render_with(&self, expansion: &RGrammarExpansion<Tag>, f: &dyn Fn(&Param) -> Option<String>) -> Result<String, RGrammarExpandError<Param>> {
+        Ok("hello".into())
     }
 }
 
@@ -276,28 +287,26 @@ impl<Param: ParameterKey, Tag: TagKey> RGrammarNode<Param, Tag> {
         }
     }
 
-    /// Expands this node given a set of rules and function providing parameter values.
+    /// Expands this node given a set of rules.
     /// Not intended to be used directly; instead the node is expanded by the RGrammar containing it.
-    fn expand_with<R: Rng>(&self, exp: &mut RGrammarExpansion<Tag>, rules: &HashMap<String, Self>, rng: &mut R, f: &dyn Fn(&Param) -> Option<String>) -> Result<String, RGrammarExpandError<Param>> {
+    fn expand<R: Rng>(&self, exp: &mut RGrammarExpansion<Tag>, rules: &HashMap<String, Self>, rng: &mut R) -> Result<(), RGrammarExpandError<Param>> {
         // Add this node's tags to the expansion.
         exp.add_tags(&self.tags);
 
         match &self.inner {
-            RGrammarNodeInner::Text(s) => Ok(s.to_string()),
-            RGrammarNodeInner::ParameterRef(k) => f(&k).ok_or(RGrammarExpandError::UndefinedArgument(k.clone())),
-            RGrammarNodeInner::SymbolRef(s) => rules.get(s).ok_or(RGrammarExpandError::UnknownRule(s.into()))?.expand_with(exp, rules, rng, f),
+            RGrammarNodeInner::Text(_) => Ok(()),
+            RGrammarNodeInner::ParameterRef(_) => Ok(()),
+            RGrammarNodeInner::SymbolRef(s) => rules.get(s).ok_or(RGrammarExpandError::UnknownRule(s.into()))?.expand(exp, rules, rng),
             RGrammarNodeInner::List(nodes) => {
-                let mut strings = Vec::new();
                 for n in nodes.iter() {
-                    let e = n.expand_with(exp, rules, rng, f)?;
-                    strings.push(e);
+                    n.expand(exp, rules, rng)?
                 }
-                Ok(strings.join(""))
+                Ok(())
             },
             RGrammarNodeInner::Choice(nodes) => {
                 let nodes = nodes.iter().filter(|n| exp.meets_constraints_for(n));
 
-                nodes.choose(rng).unwrap().expand_with(exp, rules, rng, f)
+                nodes.choose(rng).unwrap().expand(exp, rules, rng)
             }
         }
     }
@@ -386,6 +395,12 @@ mod tests {
         RGrammar::new(HashMap::from([("s".into(), r)]))
     }
 
+    fn expand_and_render_params<P: ParameterKey, T: TagKey>(g: &RGrammar<P, T>, s: &str, r: &mut StdRng, p: &HashMap<P, String>) -> String
+    {
+        let e = g.expand(s, r).unwrap();
+        g.render(&e, p).unwrap()
+    }
+
     /// Tests simple grammar expansion.
     #[test]
     fn test_simple_grammar() {
@@ -394,16 +409,16 @@ mod tests {
         let mut params = HashMap::new();
         params.insert("name", "Bob".to_string());
 
-        assert_eq!("Bob is here!", &g.expand("s", &mut StdRng::from_os_rng(), &params).unwrap());
+        assert_eq!("Bob is here!", &expand_and_render_params(&g, "s", &mut StdRng::from_os_rng(), &params));
     }
 
-    /// Tests that a sensible error is returned when expansion fails.
+    /// Tests that a sensible error is returned when rendering fails.
     #[test]
-    fn test_expansion_error() {
+    fn test_render_error() {
         let g = simple_grammar(rule![RGrammarNode::param("foo")]);
-        let params = HashMap::new();
+        let e = g.expand("s", &mut StdRng::from_os_rng()).unwrap();
         
-        let e = g.expand("s", &mut StdRng::from_os_rng(), &params);
+        let e = g.render(&e, &HashMap::new());
         assert_eq!(Err(RGrammarExpandError::UndefinedArgument("foo")), e);
     }
 
@@ -424,7 +439,7 @@ mod tests {
         params.insert("name", "Bob".to_string());
         params.insert("place", "Halifax".to_string());
 
-        assert_eq!("Hello Bob of Halifax!", &g.expand("greeting", &mut StdRng::from_os_rng(), &params).unwrap())
+        assert_eq!("Hello Bob of Halifax!", &expand_and_render_params(&g, "greeting", &mut StdRng::from_os_rng(), &params))
     }
 
     /// Tests that a grammar rule can be parsed from a string.
@@ -436,7 +451,7 @@ mod tests {
         params.insert("name".to_string(), "Steve".to_string());
         params.insert("action".to_string(), "gardening".to_string());
 
-        assert_eq!("Steve is gardening at the moment", &g.expand("s", &mut StdRng::from_os_rng(), &params).unwrap());
+        assert_eq!("Steve is gardening at the moment", &expand_and_render_params(&g, "s", &mut StdRng::from_os_rng(), &params));
     }
 
     /// Tests various parsing error cases.
@@ -468,7 +483,7 @@ mod tests {
         params.insert(1, "bar".into());
         params.insert(2, "baz".into());
 
-        assert_eq!("foo is next to bar, which is next to baz", g.expand("s", &mut StdRng::from_os_rng(), &params).unwrap());
+        assert_eq!("foo is next to bar, which is next to baz", &expand_and_render_params(&g, "s", &mut StdRng::from_os_rng(), &params));
     }
 
     /// Test that a grammar can be expanded with a function to determine parameter values.
@@ -485,7 +500,9 @@ mod tests {
             }
         };
 
-        assert_eq!("Hello Steve!", g.expand_with("s", &mut StdRng::from_os_rng(), &f).unwrap());
+        let e = g.expand("s", &mut StdRng::from_os_rng()).unwrap();
+
+        assert_eq!("Hello Steve!", g.render_with(&e, &f).unwrap());
     }
 
     /// Test that grammar rules can be parsed with references to other rules.
@@ -504,7 +521,7 @@ mod tests {
         params.insert("a".into(), "Steve".into());
         params.insert("b".into(), "Bob".into());
 
-        assert_eq!("Steve says hello to Bob", g.expand("s", &mut StdRng::from_os_rng(), &params).unwrap());
+        assert_eq!("Steve says hello to Bob", &expand_and_render_params(&g, "s", &mut StdRng::from_os_rng(), &params));
     }
 
     /// Test that grammar rules can include choices.
@@ -513,7 +530,7 @@ mod tests {
     fn test_choice() {
         let g = simple_grammar::<String>(rule!(RGrammarNode::choice(vec![RGrammarNode::text("hello".into())])));
 
-        assert_eq!("hello", g.expand("s", &mut StdRng::from_os_rng(), &HashMap::new()).unwrap());
+        assert_eq!("hello", &expand_and_render_params(&g, "s", &mut StdRng::from_os_rng(), &HashMap::new()));
     }
 
     /// Test that tags in nodes are considered during future expansion.
@@ -531,7 +548,7 @@ mod tests {
         // Run the expansion many times to be sure of a failure
         // if the constraints are not being considered.
         for _ in 0..1000 {
-            let s = g.expand("s", &mut rng, &HashMap::new()).unwrap();
+            let s = &expand_and_render_params(&g, "s", &mut rng, &HashMap::new());
             assert_eq!("first first first, second", s);
         }
     }
