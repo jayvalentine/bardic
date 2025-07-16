@@ -41,16 +41,15 @@ pub enum RGrammarExpandError<K: ParameterKey> {
     UndefinedArgument(K)
 }
 
-/// Represents a replacement grammar that can be expanded
-/// based on some set of properties.
+/// A replacement grammar.
 /// 
 /// A grammar is a collection of rules, each with a symbol,
 /// and represents a "possibility space" of different string outputs.
 /// 
 /// Grammar rules can be parsed from strings or constructed
-/// directly via the rule! macro.
+/// directly via the [rule!](crate::rule!) macro.
 /// 
-/// # Examples
+/// # Example
 /// 
 /// ```
 /// use bardic::text::{RGrammar, RGrammarNode};
@@ -91,19 +90,15 @@ pub struct RGrammar<Param: ParameterKey, Tag: TagKey> {
 
 
 impl<Param: ParameterKey, Tag: TagKey> RGrammar<Param, Tag> {
-    /// Create a new replacement grammar from a set of rules.
-    /// 
-    /// Rules within the grammar are defined as [RGrammarNode]
-    /// instances and then assigned symbols in a HashMap.
-    /// 
-    /// The grammar object can then be constructed from this map.
+    /// Create a new replacement grammar from a mapping of symbols to rules.
     pub fn new(rules: HashMap<String, RGrammarNode<Param, Tag>>) -> RGrammar<Param, Tag> {
         RGrammar { rules }
     }
 
-    /// Expand this grammar given an RNG (used to resolve choices).
+    /// Expand this grammar using an RNG (used to resolve choices).
     /// 
-    /// If successful, an expansion instance is returned.
+    /// If successful, an expansion instance is returned that can be used
+    /// later to render output from the grammar.
     /// If not, an error is returned that describes the reason why the grammar
     /// could not be expanded.
     pub fn expand<R: Rng>(&self, symbol: &str, rng: &mut R) -> Result<RGrammarExpansion<Tag>, RGrammarExpandError<Param>> {
@@ -115,23 +110,21 @@ impl<Param: ParameterKey, Tag: TagKey> RGrammar<Param, Tag> {
         Ok(expansion)
     }
 
-    /// Render the string represented by the given expansion of this grammar.
+    /// Render the string represented by an expansion of this grammar.
+    /// The hash provides values for each parameter.
     /// 
     /// Returns the rendered string if successful, or an error indicating why rendering
     /// failed if not.
-    /// 
-    /// The parameter hash given is used to fill in parameterised values if encountered.
     pub fn render(&self, expansion: &RGrammarExpansion<Tag>, params: &HashMap<Param, String>) -> Result<String, RGrammarExpandError<Param>> {
         self.render_with(expansion, &|p| params.get(p).cloned())
     }
 
     /// Render the string represented by the given expansion of this grammar.
+    /// The function `f` provides values for each parameter. This function should return
+    /// `Some` if a parameter key is valid, and `None` if not (which will result in an expansion error).
     /// 
     /// Returns the rendered string if successful, or an error indicating why rendering
     /// failed if not.
-    /// 
-    /// The function `f` is used to fill in parameterised values if encountered.
-    /// This function should return `Some(String)` if the parameter is valid, and `None` if not.
     pub fn render_with(&self, expansion: &RGrammarExpansion<Tag>, f: &dyn Fn(&Param) -> Option<String>) -> Result<String, RGrammarExpandError<Param>> {
         let mut choices = expansion.choices.clone();
         let rule = self.rules.get(&expansion.symbol).ok_or(RGrammarExpandError::UnknownRule(expansion.symbol.clone()))?;
@@ -320,6 +313,8 @@ impl<Param: ParameterKey, Tag: TagKey> RGrammarNode<Param, Tag> {
         }
     }
 
+    /// Renders a string for this rule.
+    /// Not intended to be used directly; instead the node is rendered by the RGrammar containing it.
     fn render(&self, rules: &HashMap<String, Self>, choices: &mut VecDeque<usize>, f: &dyn Fn(&Param) -> Option<String>) -> Result<String, RGrammarExpandError<Param>> {
         match &self.inner {
             RGrammarNodeInner::Text(s) => Ok(s.into()),
