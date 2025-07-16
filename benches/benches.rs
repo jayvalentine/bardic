@@ -5,8 +5,8 @@ use std::collections::HashMap;
 
 use bardic::text::*;
 
-fn expand_grammar(g: &RGrammar<String, String>, rng: &mut StdRng, symbol: &str, params: &HashMap<String, String>) {
-    g.expand(symbol, rng, params).unwrap();
+fn expand_grammar(g: &RGrammar<String, String>, rng: &mut StdRng, symbol: &str) {
+    g.expand(symbol, rng).unwrap();
 }
 
 fn benchmark_grammar_expansion(c: &mut Criterion) {
@@ -23,14 +23,9 @@ fn benchmark_grammar_expansion(c: &mut Criterion) {
     g.insert("text".into(), r1);
     let g = RGrammar::new(g);
 
-    let mut p = HashMap::new();
-    for i in '0'..='9' {
-        p.insert(i.into(), format!("number {i}"));
-    }
-
     let mut rng = StdRng::from_os_rng();
 
-    c.bench_function("grammar_expand", |b| b.iter(|| expand_grammar(&g, &mut rng, "text", &p)));
+    c.bench_function("grammar_expand", |b| b.iter(|| expand_grammar(&g, &mut rng, "text")));
 }
 
 criterion_group!(benches, benchmark_grammar_expansion);
