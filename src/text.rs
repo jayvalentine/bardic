@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::Hash;
 use rand::{Rng, seq::IteratorRandom};
 use std::fmt::Debug;
@@ -69,16 +69,19 @@ pub enum RGrammarExpandError<K: ParameterKey> {
 ///     ("event_text".into(), r2)
 /// ]));
 /// 
-/// // Define parameters for the grammar expansion.
+/// // Expand the grammar into a concrete instance.
+/// let mut rng = StdRng::from_os_rng();
+/// let e = g.expand("event_text", &mut rng).unwrap();
+/// 
+/// // Define parameters for the grammar rendering.
 /// let mut params = HashMap::new();
 /// params.insert("leader_name".into(), "Arthur".to_string());
 /// params.insert("leader_role".into(), "King".to_string());
 /// params.insert("leader_homeland".into(), "Camelot".to_string());
 /// params.insert("artifact".into(), "Holy Grail".to_string());
 /// 
-/// // Expand the grammar into a concrete instance.
-/// let mut rng = StdRng::from_os_rng();
-/// let s = g.expand("event_text", &mut rng, &params).unwrap();
+/// // Render the expansion into a string.
+/// let s = g.render(&e, &params).unwrap();
 /// // -> "King Arthur of Camelot left in search of the Holy Grail"
 /// ```
 #[derive(Debug)]
@@ -104,12 +107,12 @@ impl<Param: ParameterKey, Tag: TagKey> RGrammar<Param, Tag> {
     /// If not, an error is returned that describes the reason why the grammar
     /// could not be expanded.
     pub fn expand<R: Rng>(&self, symbol: &str, rng: &mut R) -> Result<RGrammarExpansion<Tag>, RGrammarExpandError<Param>> {
-        let mut exp = RGrammarExpansion::default();
+        let mut expansion = RGrammarExpansion::new(symbol.to_string());
 
         let rule = self.rules.get(symbol).ok_or(RGrammarExpandError::UnknownRule(symbol.into()))?;
-        rule.expand(&mut exp, &self.rules, rng)?;
+        rule.expand(&mut expansion, &self.rules, rng)?;
 
-        Ok(exp)
+        Ok(expansion)
     }
 
     /// Render the string represented by the given expansion of this grammar.
@@ -130,7 +133,9 @@ impl<Param: ParameterKey, Tag: TagKey> RGrammar<Param, Tag> {
     /// The function `f` is used to fill in parameterised values if encountered.
     /// This function should return `Some(String)` if the parameter is valid, and `None` if not.
     pub fn render_with(&self, expansion: &RGrammarExpansion<Tag>, f: &dyn Fn(&Param) -> Option<String>) -> Result<String, RGrammarExpandError<Param>> {
-        Ok("hello".into())
+        let mut choices = expansion.choices.clone();
+        let rule = self.rules.get(&expansion.symbol).ok_or(RGrammarExpandError::UnknownRule(expansion.symbol.clone()))?;
+        rule.render(&self.rules, &mut choices, f)
     }
 }
 
@@ -304,9 +309,38 @@ impl<Param: ParameterKey, Tag: TagKey> RGrammarNode<Param, Tag> {
                 Ok(())
             },
             RGrammarNodeInner::Choice(nodes) => {
-                let nodes = nodes.iter().filter(|n| exp.meets_constraints_for(n));
+                // Pick a random index/node that matches the constraints.
+                let nodes = nodes.iter().enumerate().filter(|(_, node)| exp.meets_constraints_for(node));
+                let (pos, node) = nodes.choose(rng).unwrap();
 
-                nodes.choose(rng).unwrap().expand(exp, rules, rng)
+                exp.choices.push_back(pos);
+
+                node.expand(exp, rules, rng)
+            }
+        }
+    }
+
+    fn render(&self, rules: &HashMap<String, Self>, choices: &mut VecDeque<usize>, f: &dyn Fn(&Param) -> Option<String>) -> Result<String, RGrammarExpandError<Param>> {
+        match &self.inner {
+            RGrammarNodeInner::Text(s) => Ok(s.into()),
+            RGrammarNodeInner::ParameterRef(p) => f(&p).ok_or(RGrammarExpandError::UndefinedArgument(p.clone())),
+            RGrammarNodeInner::SymbolRef(s) => {
+                let rule = rules.get(s).ok_or(RGrammarExpandError::UnknownRule(s.clone()))?;
+                rule.render(rules, choices, f)
+            }
+            RGrammarNodeInner::List(nodes) => {
+                let mut s = String::new();
+                for node in nodes {
+                    s.push_str(&node.render(rules, choices, f)?);
+                }
+                Ok(s)
+            },
+            RGrammarNodeInner::Choice(nodes) => {
+                // Get the choice from the expansion.
+                let choice = choices.pop_front().unwrap();
+
+                // Render the selected sub-node.
+                nodes.get(choice).unwrap().render(rules, choices, f)
             }
         }
     }
@@ -345,7 +379,9 @@ enum RGrammarNodeInner<Param: ParameterKey, Tag: TagKey> {
 /// An instance of this struct can be stored to deterministically
 /// render an output of the expanded grammar in future.
 pub struct RGrammarExpansion<T: TagKey> {
-    tags: HashSet<T>
+    tags: HashSet<T>,
+    choices: VecDeque<usize>,
+    symbol: String
 }
 
 impl<T: TagKey> RGrammarExpansion<T> {
@@ -354,9 +390,10 @@ impl<T: TagKey> RGrammarExpansion<T> {
         &self.tags
     }
 
-    fn new() -> Self {
+    fn new(symbol: String) -> Self {
         let tags = HashSet::new();
-        Self { tags }
+        let choices = VecDeque::new();
+        Self { tags, choices, symbol }
     }
 
     fn add_tags(&mut self, tags: &HashSet<T>) {
@@ -366,12 +403,6 @@ impl<T: TagKey> RGrammarExpansion<T> {
     /// Does this expansion meet all constraints for the given node?
     fn meets_constraints_for<P: ParameterKey>(&self, node: &RGrammarNode<P, T>) -> bool {
         node.constraints.is_subset(&self.tags)
-    }
-}
-
-impl<T: TagKey> Default for RGrammarExpansion<T> {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -550,6 +581,22 @@ mod tests {
         for _ in 0..1000 {
             let s = &expand_and_render_params(&g, "s", &mut rng, &HashMap::new());
             assert_eq!("first first first, second", s);
+        }
+    }
+
+    /// Test that rendering is deterministic.
+    #[test]
+    fn test_render_determinism() {
+        let g = simple_grammar(rule![RGrammarNode::<&str, String>::choice(vec![RGrammarNode::text("foo".into()), RGrammarNode::text("bar".into())])]);
+        let e = RGrammarExpansion {
+            tags: HashSet::new(),
+            choices: VecDeque::from([1]),
+            symbol: "s".into()
+        };
+
+        for _ in 0..1000 {
+            let s = &g.render(&e, &HashMap::new()).unwrap();
+            assert_eq!("bar", s);
         }
     }
 }
