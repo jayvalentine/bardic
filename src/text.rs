@@ -45,9 +45,15 @@ pub enum RGrammarExpandError<K: ParameterKey> {
 /// 
 /// A grammar is a collection of rules, each with a symbol,
 /// and represents a "possibility space" of different string outputs.
-/// 
 /// Grammar rules can be parsed from strings or constructed
 /// directly via the [rule!](crate::rule!) macro.
+/// 
+/// Each node in the grammar can be given output tags, which are
+/// stored in the resulting expansion if that node is visited.
+/// 
+/// Additionally, nodes can be given constraint tags, which
+/// prevents that node from being visited unless the corresponding
+/// output tag has already been generated.
 /// 
 /// # Example
 /// 
@@ -71,6 +77,7 @@ pub enum RGrammarExpandError<K: ParameterKey> {
 /// ]));
 /// 
 /// // Expand the grammar into a concrete instance.
+/// // In this case there are no initial tags.
 /// let mut rng = StdRng::from_os_rng();
 /// let tags = HashSet::new();
 /// let e = g.expand("event_text", &mut rng, tags).unwrap();
@@ -139,8 +146,8 @@ impl<Param: ParameterKey, Tag: TagKey> RGrammar<Param, Tag> {
 /// A single node in a grammar.
 #[derive(Clone, Debug)]
 pub struct RGrammarNode<Param: ParameterKey, Tag: TagKey> {
-    tags: HashSet<Tag>,
-    constraints: HashSet<Tag>,
+    output_tags: HashSet<Tag>,
+    constraint_tags: HashSet<Tag>,
     inner: RGrammarNodeInner<Param, Tag>
 }
 
@@ -220,9 +227,9 @@ impl<Param: ParameterKey, Tag: TagKey> RGrammarNode<Param, Tag> {
         let parts = parts.into_iter().map(|p| Self::from(p)).collect();
 
         let inner = RGrammarNodeInner::List(parts);
-        let tags = HashSet::new();
-        let constraints = HashSet::new();
-        Ok(Self { tags, constraints, inner })
+        let output_tags = HashSet::new();
+        let constraint_tags = HashSet::new();
+        Ok(Self { output_tags, constraint_tags, inner })
     }
 
     /// Create a list node with the given list of nodes.
@@ -255,36 +262,36 @@ impl<Param: ParameterKey, Tag: TagKey> RGrammarNode<Param, Tag> {
         Self::new(inner)
     }
 
-    /// Return this node with the given tag added.
-    pub fn with_tag(mut self, t: &Tag) -> Self {
-        self.tags.insert(t.clone());
+    /// Return this node with the given output tag added.
+    pub fn with_output_tag(mut self, t: &Tag) -> Self {
+        self.output_tags.insert(t.clone());
         self
     }
 
-    /// Return this node with the given tags added.
-    pub fn with_tags(mut self, tags: &[Tag]) -> Self {
-        for t in tags { self.tags.insert(t.clone()); }
+    /// Return this node with the given output tags added.
+    pub fn with_output_tags(mut self, tags: &[Tag]) -> Self {
+        for t in tags { self.output_tags.insert(t.clone()); }
         self
     }
 
-    /// Return this node with the given constraint added.
+    /// Return this node with the given constraint tag added.
     pub fn with_constraint(mut self, c: &Tag) -> Self {
-        self.constraints.insert(c.clone());
+        self.constraint_tags.insert(c.clone());
         self
     }
 
-    /// Return this node with the given constraints added.
-    pub fn with_constraints(mut self, constraints: &[Tag]) -> Self {
-        for c in constraints { self.constraints.insert(c.clone()); }
+    /// Return this node with the given constraint tags added.
+    pub fn with_constraints(mut self, tags: &[Tag]) -> Self {
+        for c in tags { self.constraint_tags.insert(c.clone()); }
         self
     }
 
     fn new(inner: RGrammarNodeInner<Param, Tag>) -> Self {
-        let tags = HashSet::new();
-        let constraints = HashSet::new();
+        let output_tags = HashSet::new();
+        let constraint_tags = HashSet::new();
         Self {
-            tags,
-            constraints,
+            output_tags,
+            constraint_tags,
             inner
         }
     }
@@ -293,7 +300,7 @@ impl<Param: ParameterKey, Tag: TagKey> RGrammarNode<Param, Tag> {
     /// Not intended to be used directly; instead the node is expanded by the RGrammar containing it.
     fn expand<R: Rng>(&self, exp: &mut RGrammarExpansion<Tag>, rules: &HashMap<String, Self>, rng: &mut R) -> Result<(), RGrammarExpandError<Param>> {
         // Add this node's tags to the expansion.
-        exp.add_tags(&self.tags);
+        exp.add_tags(&self.output_tags);
 
         match &self.inner {
             RGrammarNodeInner::Text(_) => Ok(()),
@@ -355,10 +362,10 @@ impl RGrammarNode<String, String> {
 
 impl<Param: ParameterKey, Tag: TagKey> From<RGrammarNodeInner<Param, Tag>> for RGrammarNode<Param, Tag> {
     fn from(value: RGrammarNodeInner<Param, Tag>) -> Self {
-        let tags = HashSet::new();
-        let constraints = HashSet::new();
+        let output_tags = HashSet::new();
+        let constraint_tags = HashSet::new();
         let inner = value;
-        Self { tags, constraints, inner }
+        Self { output_tags, constraint_tags, inner }
     }
 }
 
@@ -375,8 +382,9 @@ enum RGrammarNodeInner<Param: ParameterKey, Tag: TagKey> {
 
 /// The result of expanding a grammar.
 /// 
-/// An instance of this struct can be stored to deterministically
-/// render an output of the expanded grammar in future.
+/// This struct is a memory-efficient representation of a specific permutation
+/// of the grammar that created it, and can be used to deterministically
+/// render that permutation in future.
 pub struct RGrammarExpansion<T: TagKey> {
     tags: HashSet<T>,
     choices: VecDeque<usize>,
@@ -400,7 +408,7 @@ impl<T: TagKey> RGrammarExpansion<T> {
 
     /// Does this expansion meet all constraints for the given node?
     fn meets_constraints_for<P: ParameterKey>(&self, node: &RGrammarNode<P, T>) -> bool {
-        node.constraints.is_subset(&self.tags)
+        node.constraint_tags.is_subset(&self.tags)
     }
 }
 
@@ -571,8 +579,8 @@ mod tests {
     /// Test that tags in nodes are considered during future expansion.
     #[test]
     fn test_choice_constraint() {
-        let n1 = RGrammarNode::text("first ".into()).with_tag(&1);
-        let n2 = RGrammarNode::choice(vec![RGrammarNode::text("second ".into()).with_constraint(&2), RGrammarNode::text("first ".into()).with_constraint(&1).with_tag(&2)]);
+        let n1 = RGrammarNode::text("first ".into()).with_output_tag(&1);
+        let n2 = RGrammarNode::choice(vec![RGrammarNode::text("second ".into()).with_constraint(&2), RGrammarNode::text("first ".into()).with_constraint(&1).with_output_tag(&2)]);
         let n3 = RGrammarNode::choice(vec![RGrammarNode::text("first, second".into()).with_constraints(&[1, 2]), RGrammarNode::text("third".into()).with_constraint(&3)]);
 
         let g = HashMap::from([("s".into(), rule![n1, n2, n3])]);
