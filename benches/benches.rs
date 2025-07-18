@@ -1,12 +1,12 @@
 use criterion::*;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bardic::text::*;
 
 fn expand_grammar(g: &RGrammar<String, String>, rng: &mut StdRng, symbol: &str) {
-    g.expand(symbol, rng).unwrap();
+    g.expand(symbol, rng, HashSet::new()).unwrap();
 }
 
 fn benchmark_grammar_expansion(c: &mut Criterion) {
