@@ -52,11 +52,13 @@ pub enum RGrammarExpandError<K: ParameterKey> {
 /// # Example
 /// 
 /// ```
-/// use bardic::text::{RGrammar, RGrammarNode};
-/// use bardic::rule;
-/// use std::collections::HashMap;
+/// use std::collections::{HashMap, HashSet};
+/// 
 /// use rand::SeedableRng;
 /// use rand::rngs::StdRng;
+/// 
+/// use bardic::text::{RGrammar, RGrammarNode};
+/// use bardic::rule;
 /// 
 /// // Create rules for the grammar.
 /// let r1 = RGrammarNode::parse("[leader_role] [leader_name] of [leader_homeland]").unwrap();
@@ -70,7 +72,8 @@ pub enum RGrammarExpandError<K: ParameterKey> {
 /// 
 /// // Expand the grammar into a concrete instance.
 /// let mut rng = StdRng::from_os_rng();
-/// let e = g.expand("event_text", &mut rng).unwrap();
+/// let tags = HashSet::new();
+/// let e = g.expand("event_text", &mut rng, tags).unwrap();
 /// 
 /// // Define parameters for the grammar rendering.
 /// let mut params = HashMap::new();
@@ -95,14 +98,15 @@ impl<Param: ParameterKey, Tag: TagKey> RGrammar<Param, Tag> {
         RGrammar { rules }
     }
 
-    /// Expand this grammar using an RNG (used to resolve choices).
+    /// Expand this grammar using an RNG (used to resolve choices)
+    /// and a set of initial tags.
     /// 
     /// If successful, an expansion instance is returned that can be used
     /// later to render output from the grammar.
     /// If not, an error is returned that describes the reason why the grammar
     /// could not be expanded.
-    pub fn expand<R: Rng>(&self, symbol: &str, rng: &mut R) -> Result<RGrammarExpansion<Tag>, RGrammarExpandError<Param>> {
-        let mut expansion = RGrammarExpansion::new(symbol.to_string());
+    pub fn expand<R: Rng>(&self, symbol: &str, rng: &mut R, tags: HashSet<Tag>) -> Result<RGrammarExpansion<Tag>, RGrammarExpandError<Param>> {
+        let mut expansion = RGrammarExpansion::new(symbol.to_string(), tags);
 
         let rule = self.rules.get(symbol).ok_or(RGrammarExpandError::UnknownRule(symbol.into()))?;
         rule.expand(&mut expansion, &self.rules, rng)?;
@@ -385,8 +389,7 @@ impl<T: TagKey> RGrammarExpansion<T> {
         &self.tags
     }
 
-    fn new(symbol: String) -> Self {
-        let tags = HashSet::new();
+    fn new(symbol: String, tags: HashSet<T>) -> Self {
         let choices = VecDeque::new();
         Self { tags, choices, symbol }
     }
@@ -423,7 +426,13 @@ mod tests {
 
     fn expand_and_render_params<P: ParameterKey, T: TagKey>(g: &RGrammar<P, T>, s: &str, r: &mut StdRng, p: &HashMap<P, String>) -> String
     {
-        let e = g.expand(s, r).unwrap();
+        let e = g.expand(s, r, HashSet::new()).unwrap();
+        g.render(&e, p).unwrap()
+    }
+
+    fn expand_and_render_params_with_tags<P: ParameterKey, T: TagKey>(g: &RGrammar<P, T>, s: &str, r: &mut StdRng, p: &HashMap<P, String>, t: HashSet<T>) -> String
+    {
+        let e = g.expand(s, r, t).unwrap();
         g.render(&e, p).unwrap()
     }
 
@@ -442,7 +451,7 @@ mod tests {
     #[test]
     fn test_render_error() {
         let g = simple_grammar(rule![RGrammarNode::param("foo")]);
-        let e = g.expand("s", &mut StdRng::from_os_rng()).unwrap();
+        let e = g.expand("s", &mut StdRng::from_os_rng(), HashSet::new()).unwrap();
         
         let e = g.render(&e, &HashMap::new());
         assert_eq!(Err(RGrammarExpandError::UndefinedArgument("foo")), e);
@@ -526,7 +535,7 @@ mod tests {
             }
         };
 
-        let e = g.expand("s", &mut StdRng::from_os_rng()).unwrap();
+        let e = g.expand("s", &mut StdRng::from_os_rng(), HashSet::new()).unwrap();
 
         assert_eq!("Hello Steve!", g.render_with(&e, &f).unwrap());
     }
@@ -591,6 +600,24 @@ mod tests {
 
         for _ in 0..1000 {
             let s = &g.render(&e, &HashMap::new()).unwrap();
+            assert_eq!("bar", s);
+        }
+    }
+
+    /// Test that constraints are checked against tags passed when expanding.
+    #[test]
+    fn test_constraint_initial_tag() {
+        let g = simple_grammar(rule![RGrammarNode::<&str, String>::choice(vec![
+            RGrammarNode::text("foo".into()).with_constraint(&"f".into()),
+            RGrammarNode::text("bar".into()).with_constraint(&"b".into())
+        ])]);
+
+        let tags = HashSet::from(["b".into()]);
+
+        let mut r = StdRng::from_os_rng();
+
+        for _ in 0..1000 {
+            let s = &expand_and_render_params_with_tags(&g, "s", &mut r, &HashMap::new(), tags.clone());
             assert_eq!("bar", s);
         }
     }
