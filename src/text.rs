@@ -66,7 +66,8 @@ pub enum RGrammarExpandError<K: ParameterKey> {
 /// use bardic::rule;
 /// 
 /// // Create rules for the grammar.
-/// let r1 = RGrammarNode::parse("[leader_role] [leader_name] of [leader_homeland]").unwrap();
+/// let r1 = RGrammarNode::parse("[leader_role] [leader_name] of [leader_homeland]")
+///     .expect("Parsing failed!");
 /// let r2 = rule![RGrammarNode::symbol("leader_title".into()), RGrammarNode::text(" left in search of the ".into()), RGrammarNode::param("artifact".into())];
 /// 
 /// // Create grammar by assigning symbols to each rule.
@@ -127,6 +128,7 @@ impl<Param: ParameterKey, Tag: TagKey> RGrammar<Param, Tag> {
     pub fn expand<R: Rng>(&self, symbol: &str, rng: &mut R, tags: HashSet<Tag>) -> RGrammarExpansion<Tag> {
         let mut expansion = RGrammarExpansion::new(symbol.to_string(), tags);
 
+        // Unwrapping is safe: rules were already validated on creation.
         let rule = self.rules.get(symbol).unwrap();
         rule.expand(&mut expansion, &self.rules, rng);
 
@@ -150,7 +152,7 @@ impl<Param: ParameterKey, Tag: TagKey> RGrammar<Param, Tag> {
     /// failed if not.
     pub fn render_with(&self, expansion: &RGrammarExpansion<Tag>, f: &dyn Fn(&Param) -> Option<String>) -> Result<String, RGrammarExpandError<Param>> {
         let mut choices = expansion.choices.clone();
-        let rule = self.rules.get(&expansion.symbol).unwrap();
+        let rule = self.rules.get(&expansion.symbol).expect("Expansion has invalid symbol");
         rule.render(&self.rules, &mut choices, f)
     }
 }
@@ -317,7 +319,10 @@ impl<Param: ParameterKey, Tag: TagKey> RGrammarNode<Param, Tag> {
         match &self.inner {
             RGrammarNodeInner::Text(_) => (),
             RGrammarNodeInner::ParameterRef(_) => (),
+
+            // Unwrapping is safe: rules were validated on creation.
             RGrammarNodeInner::SymbolRef(s) => rules.get(s).unwrap().expand(exp, rules, rng),
+
             RGrammarNodeInner::List(nodes) => {
                 for n in nodes.iter() {
                     n.expand(exp, rules, rng);
@@ -342,6 +347,7 @@ impl<Param: ParameterKey, Tag: TagKey> RGrammarNode<Param, Tag> {
             RGrammarNodeInner::Text(s) => Ok(s.into()),
             RGrammarNodeInner::ParameterRef(p) => f(&p).ok_or(RGrammarExpandError::UndefinedArgument(p.clone())),
             RGrammarNodeInner::SymbolRef(s) => {
+                // Unwrapping is safe: rules were already validated on creation.
                 let rule = rules.get(s).unwrap();
                 rule.render(rules, choices, f)
             }
@@ -354,10 +360,12 @@ impl<Param: ParameterKey, Tag: TagKey> RGrammarNode<Param, Tag> {
             },
             RGrammarNodeInner::Choice(nodes) => {
                 // Get the choice from the expansion.
-                let choice = choices.pop_front().unwrap();
+                let choice = choices.pop_front().expect("Choice missing from expansion");
 
                 // Render the selected sub-node.
-                nodes.get(choice).unwrap().render(rules, choices, f)
+                nodes.get(choice)
+                    .expect("Invalid choice stored in expansion")
+                    .render(rules, choices, f)
             }
         }
     }
@@ -693,7 +701,7 @@ mod tests {
         }
     }
 
-    /// Test that grammars are validated on creation.
+    /// Test that invalid symbol references in grammars are validated on creation.
     #[test]
     fn test_validate_on_creation() {
         // Grammar that references an unknown rule.
