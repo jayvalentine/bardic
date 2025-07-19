@@ -77,7 +77,7 @@ pub enum RGrammarExpandError<K: ParameterKey> {
 /// let r2 = rule![RGrammarNode::symbol("leader_title".into()), RGrammarNode::text(" left in search of the ".into()), RGrammarNode::param("artifact".into())];
 /// 
 /// // Create grammar by assigning symbols to each rule.
-/// let g = RGrammar::new(HashMap::from([
+/// let g = RGrammar::<String, String>::new(HashMap::from([
 ///     ("leader_title".into(), r1),
 ///     ("event_text".into(), r2)
 /// ])).expect("Grammar instantiation failed");
@@ -388,9 +388,9 @@ impl<Param: ParameterKey, Tag: TagKey> RGrammarNode<Param, Tag> {
     }
 }
 
-impl RGrammarNode<String, String> {
-    /// Parse a string into a rule where parameter/tag keys are strings.
-    pub fn parse(s: &str) -> Result<RGrammarNode<String, String>, RGrammarParseError> {
+impl<T: TagKey> RGrammarNode<String, T> {
+    /// Parse a string into a rule where parameter keys are strings.
+    pub fn parse(s: &str) -> Result<RGrammarNode<String, T>, RGrammarParseError> {
         let f = |p: &str| { Some(p.to_string()) };
         RGrammarNode::parse_with(s, &f)
     }
@@ -579,11 +579,11 @@ mod tests {
     /// Tests various parsing error cases.
     #[test]
     fn test_parse_errors() {
-        assert_eq!(RGrammarParseError::UnmatchedDelimiter, RGrammarNode::parse("Hello [name").unwrap_err());
-        assert_eq!(RGrammarParseError::UnmatchedDelimiter, RGrammarNode::parse("name] is here!").unwrap_err());
-        assert_eq!(RGrammarParseError::EmptyDelimiter, RGrammarNode::parse("[] is here!").unwrap_err());
-        assert_eq!(RGrammarParseError::NestedDelimiter, RGrammarNode::parse("[[name]] is here!").unwrap_err());
-        assert_eq!(RGrammarParseError::NestedDelimiter, RGrammarNode::parse("[{name}] is here!").unwrap_err());
+        assert_eq!(RGrammarParseError::UnmatchedDelimiter, RGrammarNode::<String, String>::parse("Hello [name").unwrap_err());
+        assert_eq!(RGrammarParseError::UnmatchedDelimiter, RGrammarNode::<String, String>::parse("name] is here!").unwrap_err());
+        assert_eq!(RGrammarParseError::EmptyDelimiter, RGrammarNode::<String, String>::parse("[] is here!").unwrap_err());
+        assert_eq!(RGrammarParseError::NestedDelimiter, RGrammarNode::<String, String>::parse("[[name]] is here!").unwrap_err());
+        assert_eq!(RGrammarParseError::NestedDelimiter, RGrammarNode::<String, String>::parse("[{name}] is here!").unwrap_err());
     }
 
     /// Test that a grammar can be parsed with a function to determine parameter keys.
@@ -630,7 +630,7 @@ mod tests {
     /// Test that grammar rules can be parsed with references to other rules.
     #[test]
     fn test_parse_with_function_subgrammar() {
-        let r1 = RGrammarNode::parse("hello to [b]").unwrap();
+        let r1 = RGrammarNode::<String, String>::parse("hello to [b]").unwrap();
         let r2 = RGrammarNode::parse("[a] says {greeting}").unwrap();
 
         let rules = HashMap::from([
