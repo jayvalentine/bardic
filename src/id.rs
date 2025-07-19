@@ -1,4 +1,4 @@
-use num::{Unsigned, Integer};
+use num::{Bounded, Integer, Unsigned};
 use std::collections::HashMap;
 use std::hash::Hash;
 
@@ -8,16 +8,19 @@ use std::hash::Hash;
 /// 
 /// This trait is automatically implemented on any type
 /// satisfying the constraints.
-pub trait IdValue: Unsigned + Integer + Copy + Hash {}
-impl<T> IdValue for T where T: Unsigned + Integer + Copy + Hash {}
+pub trait IdValue: Unsigned + Integer + Copy + Hash + Bounded {}
+impl<T> IdValue for T where T: Unsigned + Integer + Copy + Hash + Bounded {}
 
 /// Errors that may occur when creating or referencing an ID.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IdError {
     /// The ID being created already exists.
     Duplicate,
     /// The ID being referenced does not exist.
-    NonExistent
+    NonExistent,
+    /// The maximum number of IDs allowed by the underlying type
+    /// have already been created.
+    MaximumNumberCreated
 }
 
 /// A reference to an ID.
@@ -27,7 +30,8 @@ pub struct IdRef<T>(T);
 /// Manages creation and referencing of IDs.
 pub struct IdManager<T: IdValue> {
     next_id_value: T,
-    ids: HashMap<String, T>
+    ids: HashMap<String, T>,
+    max_created: bool
 }
 
 impl<T: IdValue> IdManager<T> {
@@ -38,7 +42,8 @@ impl<T: IdValue> IdManager<T> {
 
         IdManager {
             next_id_value,
-            ids
+            ids,
+            max_created: false
         }
     }
 
@@ -58,10 +63,17 @@ impl<T: IdValue> IdManager<T> {
     pub fn create(&mut self, id_str: &str) -> Result<IdRef<T>, IdError> {
         if self.ids.contains_key(id_str) {
             Err(IdError::Duplicate)
+        } else if self.max_created {
+            Err(IdError::MaximumNumberCreated)
         } else {
             let id = IdRef::<T>(self.next_id_value);
             self.ids.insert(id_str.to_string(), self.next_id_value);
-            self.next_id_value = self.next_id_value + T::one();
+
+            if self.next_id_value < T::max_value() {
+                self.next_id_value = self.next_id_value + T::one();
+            } else {
+                self.max_created = true;
+            }
             Ok(id)
         }
     }
@@ -164,5 +176,20 @@ mod tests {
 
         assert_eq!("id1", h.get(&idref1).unwrap());
         assert_eq!("id2", h.get(&idref2).unwrap());
+    }
+
+    // Tests that an error is returned if attempting to create
+    // an ID results in overflow.
+    #[test]
+    fn test_id_create_overflow() {
+        let mut idman = IdManager::<u8>::new();
+
+        // Creating the first 256 IDs should be OK.
+        for i in 1..=256 {
+            idman.create(&i.to_string()).unwrap();
+        }
+
+        // Creating the 257th ID should fail.
+        assert_eq!(IdError::MaximumNumberCreated, idman.create("257").unwrap_err());
     }
 }
