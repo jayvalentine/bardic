@@ -4,6 +4,8 @@ license = "MIT"
 description = "A performance-focused toolkit for procedural narrative generation."
 version = "0.1.0"
 edition = "2021"
+readme = "README.md"
+repository = "https://github.com/jayvalentine/bardic"
 
 [dependencies]
 criterion = "0.5.1"
