@@ -1,5 +1,6 @@
 use num::{Unsigned, Integer};
 use std::collections::HashMap;
+use std::hash::Hash;
 
 /// Types implementing this trait can be used as IDs.
 /// IDs are required to be integer types so non-conflicting
@@ -7,8 +8,8 @@ use std::collections::HashMap;
 /// 
 /// This trait is automatically implemented on any type
 /// satisfying the constraints.
-pub trait IdValue: Unsigned + Integer + Copy {}
-impl<T> IdValue for T where T: Unsigned + Integer + Copy {}
+pub trait IdValue: Unsigned + Integer + Copy + Hash {}
+impl<T> IdValue for T where T: Unsigned + Integer + Copy + Hash {}
 
 /// Errors that may occur when creating or referencing an ID.
 #[derive(Clone, Copy, Debug)]
@@ -19,34 +20,9 @@ pub enum IdError {
     NonExistent
 }
 
-/// Each ID should be unique within a given system.
-/// 
-/// IDs cannot be compared with one another because by definition
-/// they will always be different.
-#[derive(Clone, Copy, Debug)]
-pub struct Id<T: Unsigned + Integer>(T);
-
 /// A reference to an ID.
-/// The reference can be tested against other references
-/// or against the original Id instance.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct IdRef<T>(T);
-
-impl<T: IdValue> PartialEq<Id<T>> for IdRef<T> {
-    /// Compares for equality between this reference
-    /// and an ID. The two are considered equal if they
-    /// refer to the same underlying value.
-    fn eq(&self, other: &Id<T>) -> bool {
-        self.0 == other.0
-    }
-}
-
-impl<T: IdValue> PartialEq for IdRef<T> {
-    /// Compares for equality between two ID references.
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
-}
 
 /// Manages creation and referencing of IDs.
 pub struct IdManager<T: IdValue> {
@@ -79,11 +55,11 @@ impl<T: IdValue> IdManager<T> {
     /// let id2 = idman.create("foo");
     /// // -> Err
     /// ```
-    pub fn create(&mut self, id_str: &str) -> Result<Id<T>, IdError> {
+    pub fn create(&mut self, id_str: &str) -> Result<IdRef<T>, IdError> {
         if self.ids.contains_key(id_str) {
             Err(IdError::Duplicate)
         } else {
-            let id = Id::<T>(self.next_id_value);
+            let id = IdRef::<T>(self.next_id_value);
             self.ids.insert(id_str.to_string(), self.next_id_value);
             self.next_id_value = self.next_id_value + T::one();
             Ok(id)
@@ -125,11 +101,10 @@ impl<T: IdValue> Default for IdManager<T> {
 mod tests {
     use super::*;
 
-    // Tests that ID references can be equality-compared with one
-    // another and with IDs.
+    // Tests that ID references can be equality-compared.
     #[test]
     fn test_id_ref_eq() {
-        let id = Id::<u32>(0);
+        let id = IdRef::<u32>(0);
         let id_ref1 = IdRef::<u32>(0);
         let id_ref2 = IdRef::<u32>(1);
 
@@ -169,5 +144,25 @@ mod tests {
 
         assert_eq!(idref2, id2);
         assert_eq!(idref1, id1);
+    }
+
+    // Tests that IDs and references can be used as hashes.
+    #[test]
+    fn test_id_hashing() {
+        let mut idman = IdManager::<u64>::new();
+
+        let id1 = idman.create("foo").unwrap();
+        let id2 = idman.create("bar").unwrap();
+
+        let h: HashMap<IdRef<u64>, String> = HashMap::from([
+            (id1, "id1".into()),
+            (id2, "id2".into())
+        ]);
+
+        let idref1 = idman.reference("foo").unwrap();
+        let idref2 = idman.reference("bar").unwrap();
+
+        assert_eq!("id1", h.get(&idref1).unwrap());
+        assert_eq!("id2", h.get(&idref2).unwrap());
     }
 }
