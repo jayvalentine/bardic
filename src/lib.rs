@@ -1,10 +1,7 @@
 #![deny(missing_docs)]
 
-//! Bardic provides functionality for creating procedural narrative generators.
-//! This includes:
-//! 
-//! * Text generation
-//! * Entity management
+//! Bardic provides performant building blocks for creating large-scale
+//! procedural narrative generators.
 
 /// Provides a way to manage and reference unique IDs for
 /// entities in the system.
