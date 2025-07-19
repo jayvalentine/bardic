@@ -2,7 +2,7 @@
 name = "bardic"
 license = "MIT"
 description = "A performance-focused toolkit for procedural narrative generation."
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 readme = "README.md"
 repository = "https://github.com/jayvalentine/bardic"
