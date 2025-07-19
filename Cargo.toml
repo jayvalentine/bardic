@@ -1,5 +1,7 @@
 [package]
 name = "bardic"
+license = "MIT"
+description = "A performance-focused toolkit for procedural narrative generation."
 version = "0.1.0"
 edition = "2021"
 
