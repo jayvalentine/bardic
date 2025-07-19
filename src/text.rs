@@ -73,12 +73,12 @@ pub enum RGrammarExpandError<K: ParameterKey> {
 /// let g = RGrammar::new(HashMap::from([
 ///     ("leader_title".into(), r1),
 ///     ("event_text".into(), r2)
-/// ]));
+/// ])).expect("Grammar instantiation failed");
 /// 
 /// // Expand the grammar into a concrete instance.
 /// let mut rng = StdRng::from_os_rng();
 /// let tags = HashSet::new();
-/// let e = g.expand("event_text", &mut rng, tags).unwrap();
+/// let e = g.expand("event_text", &mut rng, tags);
 /// 
 /// // Define parameters for the grammar rendering.
 /// let mut params = HashMap::new();
@@ -99,7 +99,21 @@ pub struct RGrammar<Param: ParameterKey, Tag: TagKey> {
 
 impl<Param: ParameterKey, Tag: TagKey> RGrammar<Param, Tag> {
     /// Create a new replacement grammar from a mapping of symbols to rules.
-    fn new(rules: HashMap<String, RGrammarNode<Param, Tag>>) -> Result<Self, RGrammarCreationError> {
+    pub fn new(rules: HashMap<String, RGrammarNode<Param, Tag>>) -> Result<Self, RGrammarCreationError> {
+        // Check that all referenced symbols exist.
+        for (_, rule) in rules.iter() {
+            for node in rule.iter() {
+                match &node.inner {
+                    RGrammarNodeInner::SymbolRef(s) => {
+                        if !rules.contains_key(s) {
+                            return Err(RGrammarCreationError::UndefinedRule(s.into()))
+                        }
+                    }
+                    _ => ()
+                }
+            }
+        }
+
         Ok(RGrammar { rules })
     }
 
@@ -347,6 +361,16 @@ impl<Param: ParameterKey, Tag: TagKey> RGrammarNode<Param, Tag> {
             }
         }
     }
+
+    fn iter(&self) -> RGrammarNodeIter<Param, Tag> {
+        let current = self;
+        let nexts = Vec::new();
+
+        RGrammarNodeIter {
+            current,
+            nexts
+        }
+    }
 }
 
 impl RGrammarNode<String, String> {
@@ -363,6 +387,49 @@ impl<Param: ParameterKey, Tag: TagKey> From<RGrammarNodeInner<Param, Tag>> for R
         let constraints = HashSet::new();
         let inner = value;
         Self { tags, constraints, inner }
+    }
+}
+
+/// Iterator over a sequence of grammar nodes.
+struct RGrammarNodeIter<'a, P: ParameterKey, T: TagKey> {
+    /// The node currently being iterated on.
+    current: &'a RGrammarNode<P, T>,
+
+    /// The nodes to visit once the current node
+    /// and its children have all been visited.
+    nexts: Vec<&'a RGrammarNode<P, T>>
+}
+
+impl<'a, P: ParameterKey, T: TagKey> Iterator for RGrammarNodeIter<'a, P, T> {
+    type Item = &'a RGrammarNode<P, T>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let next = match &self.current.inner {
+            RGrammarNodeInner::Text(_) => self.nexts.pop(),
+            RGrammarNodeInner::ParameterRef(_) => self.nexts.pop(),
+            RGrammarNodeInner::SymbolRef(_) => self.nexts.pop(),
+            RGrammarNodeInner::Choice(nodes) => {
+                // Store all child nodes to be visited.
+                for n in nodes {
+                    self.nexts.push(&n);
+                }
+
+                // Visit the first child node.
+                self.nexts.pop()
+            }
+            RGrammarNodeInner::List(nodes) => {
+                // Store all child nodes to be visited.
+                for n in nodes {
+                    self.nexts.push(&n);
+                }
+
+                // Visit the first child node.
+                self.nexts.pop()
+            }
+        };
+
+        self.current = next?;
+        Some(self.current)
     }
 }
 
