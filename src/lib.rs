@@ -15,3 +15,6 @@ pub mod id;
 
 /// Provides functionality for procedural text generation.
 pub mod text;
+
+/// Provides traits and types for managing entities, actions, and events.
+pub mod entity;
