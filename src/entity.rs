@@ -3,8 +3,8 @@ use std::{collections::HashSet, hash::Hash};
 /// Types implementing this trait can be used as IDs for entities.
 /// This trait is automatically implemented for all types implementing
 /// the bounds.
-pub trait IdType: Eq + Hash {}
-impl<T> IdType for T where T: Eq + Hash {}
+pub trait IdType: Eq + Hash + Clone {}
+impl<T> IdType for T where T: Eq + Hash + Clone {}
 
 /// A trait for entities in an entity-action system.
 /// 
@@ -24,15 +24,37 @@ pub trait Entity<ID: IdType, T> {
 }
 
 /// A relationship between two entities.
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Clone)]
 pub struct Relationship<ID: IdType> {
     subject: ID,
     object: ID,
     kind: RelationshipKind
 }
 
+impl<ID: IdType> Relationship<ID> {
+    /// Create a new relationship.
+    pub fn new(subject: ID, object: ID, kind: RelationshipKind) -> Relationship<ID> {
+        Relationship { subject, object, kind }
+    }
+
+    /// The subject of this relationship.
+    pub fn subject(&self) -> &ID {
+        &self.subject
+    }
+
+    /// The object of this relationship.
+    pub fn object(&self) -> &ID {
+        &self.object
+    }
+
+    /// The kind of relationship.
+    pub fn kind(&self) -> &RelationshipKind {
+        &self.kind
+    }
+}
+
 /// Represents the possible kinds of relationship between entities.
-#[derive(PartialEq, Eq, Hash, Debug)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum RelationshipKind {
     /// The relationship describes the subject's position relative to the object.
     /// The string describes the kind of positioning, e.g. "on", "in", "near to".
@@ -67,12 +89,12 @@ impl<ID: IdType> WorldState<ID> {
     }
 
     /// Apply the given action to this world state.
-    pub fn apply_action(&mut self, a: Action<ID>) {
-        for r in a.removed_relationships {
+    pub fn apply_action(&mut self, a: &Action<ID>) {
+        for r in &a.removed_relationships {
             self.relationships.remove(&r);
         }
-        for r in a.added_relationships {
-            self.relationships.insert(r);
+        for r in &a.added_relationships {
+            self.relationships.insert(r.clone());
         }
     }
 }
@@ -84,7 +106,8 @@ pub struct Action<ID: IdType> {
 }
 
 impl<'a, ID: IdType> Action<ID> {
-    fn new(removed_relationships: HashSet<Relationship<ID>>, added_relationships: HashSet<Relationship<ID>>) -> Action<ID>
+    /// Create a new action.
+    pub fn new(removed_relationships: HashSet<Relationship<ID>>, added_relationships: HashSet<Relationship<ID>>) -> Action<ID>
     {
         Action {
             removed_relationships,
@@ -148,7 +171,7 @@ mod tests {
         let added = HashSet::from([Relationship { subject: 0, object: 1, kind:RelationshipKind::Location("on".into())}]);
         let a = Action::new(removed, added);
 
-        w.apply_action(a);
+        w.apply_action(&a);
 
         assert_eq!(3, w.relationships.len());
 
